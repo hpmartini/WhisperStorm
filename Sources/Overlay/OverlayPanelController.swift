@@ -1,0 +1,121 @@
+import AppKit
+import Combine
+import SwiftUI
+
+/// Owns the borderless, non-activating overlay panel that shows the waveform.
+/// The panel never steals focus from the frontmost app: it uses
+/// `.nonactivatingPanel`, ignores mouse events and is shown with
+/// `orderFrontRegardless()` instead of activating the app.
+@MainActor
+final class OverlayPanelController {
+    private enum Layout {
+        static let width: CGFloat = 340
+        static let height: CGFloat = 104
+        static let bottomMargin: CGFloat = 28
+    }
+
+    private let state: AppState
+    private let levelStore: AudioLevelStore
+    private var panel: NSPanel?
+    private var hideWorkItem: DispatchWorkItem?
+    private var phaseCancellable: AnyCancellable?
+
+    init(state: AppState, levelStore: AudioLevelStore) {
+        self.state = state
+        self.levelStore = levelStore
+        phaseCancellable = state.$phase
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] phase in
+                self?.handlePhase(phase)
+            }
+    }
+
+    private func handlePhase(_ phase: AppState.Phase) {
+        switch phase {
+        case .recording, .transcribing:
+            show()
+        case .success:
+            // Keep the success flash visible briefly, then fade out.
+            show()
+            scheduleHide(after: 0.8)
+        case .error:
+            show()
+            scheduleHide(after: 3.5)
+        case .idle:
+            fadeOut()
+        }
+    }
+
+    // MARK: - Panel lifecycle
+
+    private func show() {
+        hideWorkItem?.cancel()
+        hideWorkItem = nil
+        let panel = self.panel ?? makePanel()
+        self.panel = panel
+        position(panel)
+        panel.alphaValue = 1
+        if !panel.isVisible {
+            panel.orderFrontRegardless()
+        }
+    }
+
+    private func scheduleHide(after delay: TimeInterval) {
+        hideWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.fadeOut()
+        }
+        hideWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func fadeOut(duration: TimeInterval = 0.35) {
+        hideWorkItem?.cancel()
+        hideWorkItem = nil
+        guard let panel, panel.isVisible else { return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = duration
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
+            panel.orderOut(nil)
+            panel.alphaValue = 1
+        })
+    }
+
+    private func makePanel() -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: Layout.width, height: Layout.height),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .floating
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.animationBehavior = .utilityWindow
+
+        let hostingView = NSHostingView(
+            rootView: OverlayView(state: state, levelStore: levelStore)
+        )
+        hostingView.frame = panel.contentRect(forFrameRect: panel.frame)
+        panel.contentView = hostingView
+        return panel
+    }
+
+    /// Centers the panel at the bottom edge of the screen that currently has
+    /// keyboard focus.
+    private func position(_ panel: NSPanel) {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        let visible = screen.visibleFrame
+        let origin = NSPoint(
+            x: visible.midX - Layout.width / 2,
+            y: visible.minY + Layout.bottomMargin
+        )
+        panel.setFrame(NSRect(origin: origin, size: NSSize(width: Layout.width, height: Layout.height)), display: true)
+    }
+}
