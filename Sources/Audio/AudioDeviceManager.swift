@@ -31,6 +31,12 @@ final class AudioDeviceManager: ObservableObject {
         return inputDevices.first { $0.uid == uid }
     }
 
+    /// The device CoreAudio currently records from when no device is pinned.
+    var defaultInputDevice: AudioInputDevice? {
+        guard let id = Self.defaultInputDeviceID() else { return nil }
+        return inputDevices.first { $0.id == id }
+    }
+
     func isDevicePresent(id: AudioDeviceID) -> Bool {
         inputDevices.contains { $0.id == id }
     }

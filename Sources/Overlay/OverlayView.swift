@@ -62,9 +62,16 @@ struct OverlayView: View {
     private var statusLine: some View {
         switch state.phase {
         case .recording:
-            Text("Listening — esc to cancel")
+            Text(state.captureNotice ?? "Listening — esc to cancel")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(CyberpunkPalette.cyan.opacity(0.65))
+                .foregroundStyle(
+                    state.captureNotice == nil
+                        ? CyberpunkPalette.cyan.opacity(0.65)
+                        : CyberpunkPalette.errorRed
+                )
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 12)
         case .transcribing:
             Text(state.statusDetail ?? "Transcribing…")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -94,7 +101,10 @@ private struct WaveformCanvas: View {
     @State private var model = WaveformModel()
 
     var body: some View {
-        TimelineView(.animation) { timeline in
+        // Pause the 60 fps timeline whenever the overlay is at rest. Without
+        // this, SwiftUI keeps re-rendering the Canvas at display refresh rate
+        // even while the panel is hidden, burning CPU in the idle state.
+        TimelineView(.animation(minimumInterval: nil, paused: isPaused)) { timeline in
             Canvas { context, size in
                 model.draw(
                     in: &context,
@@ -105,6 +115,13 @@ private struct WaveformCanvas: View {
                 )
             }
         }
+    }
+
+    /// The overlay is only ever on screen during recording/transcribing and
+    /// the brief success/error tail. In `.idle` the panel is hidden, so there
+    /// is nothing to animate.
+    private var isPaused: Bool {
+        state.phase == .idle
     }
 }
 

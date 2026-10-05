@@ -1,5 +1,132 @@
 # TASK.md — Issue Log
 
+## 2026-10-02 — "The audio engine failed to start … avfaudio error 35"
+
+### Issue
+Dictation intermittently failed with the notification
+`The audio engine failed to start: The operation couldn't be completed.
+(com.apple.coreaudio.avfaudio error 35.)`. It had worked the day before.
+
+### Root cause
+External, not a code regression: the audio path (`AudioCaptureEngine`) was
+unchanged. The file log showed `AVAudioEngine.start()` on the pinned Elgato
+Wave:3 blocking for 7–10 s between 18:16 and 18:44 local time, then either
+throwing error 35 or starting late. Before that window, every start took under
+1 s. Shortly afterwards a standalone script that pinned the Wave:3 the same way
+started in 0.1–0.5 s six times in a row. This was a transient HAL/device
+stall. What caused it can't be reconstructed afterwards. Ruled out: the
+Wave Link app (not installed, only its HAL driver is), hog mode (none), and
+another process holding input (none at check time).
+
+A side effect *was* an app defect: `start()` blocks the main actor, so the
+push-to-talk key-up only arrived after the 7 s stall. That produced a 0-sample
+recording, which was discarded silently as an "accidental tap".
+
+### Fix
+- `engineStartFailed` is reported as "<device> did not start (N s). Replug it
+  or pick another microphone in Settings." instead of the raw CoreAudio text.
+- Start duration is logged. If a recording is too short *and* the start took
+  ≥ 2 s, the user gets an error instead of a silent discard.
+- Not done: moving `start()` off the main actor. That is a larger change. Do it
+  if the stall comes back.
+
+### If it recurs
+Replug the Wave:3, or run `sudo killall coreaudiod`. Then check the log for
+`start took`.
+
+## 2026-08-24 — Dictation records silence: no waveform, no text
+
+### Issue
+Recording produced neither a visible waveform animation nor any inserted or
+copied text, although the hotkey, the microphone selection and the microphone
+itself appeared fine.
+
+### Root cause
+Two layers, found by logging every stage boundary into
+`~/Library/Logs/WhisperStorm.log`:
+
+```
+HOTKEY down held=524288 expected=524288
+  -> accepted, mode=pushToTalk
+START requested, phase=idle
+  -> recording (device=default)     <-- not the selected microphone
+STOP samples=35108 duration=2.19s
+TRANSCRIPTION FAILED: No speech was recognized.
+```
+
+The hotkey, the push-to-talk flow and audio capture all worked. But
+`resolveCaptureDeviceID()` could not resolve the stored microphone UID
+(`AppleUSBAudioEngine:Elgato Systems:Elgato Wave:3:…`) — the Elgato was not
+connected (`ioreg -p IOUSB` listed no USB devices at all; only Elgato's
+*virtual* Wave Link driver inputs were still registered, with Wave Link itself
+not running). So capture silently fell back to the system default input, the
+built-in MacBook microphone, which delivered silence.
+
+Both symptoms follow from that: a silent buffer keeps the waveform flat (it
+looks like "no animation"), and WhisperKit turns silence into
+"No speech was recognized" — so nothing is ever inserted or copied.
+
+The fallback was effectively invisible: it only posted a user notification,
+which is easy to miss, and the overlay kept claiming "Listening".
+
+### Ruled out along the way
+- `panel.contentView = nil` in the overlay's fade-out (from the 2026-07-06 CPU
+  fix) was *not* the cause. A standalone AppKit test confirmed NSWindow really
+  reports `contentView == nil` afterwards, so the lazy re-attach in `show()`
+  works.
+- The `heldModifiersMatchShortcut()` guard was *not* the cause: the log shows
+  `held=524288 expected=524288`, i.e. the hotkey is accepted.
+
+### Fix
+- `resolveCaptureDevice()` (renamed from `resolveCaptureDeviceID`) now also
+  sets `AppState.captureNotice`, which the overlay shows in red during
+  `.recording` instead of "Listening — esc to cancel". Falling back to another
+  input device is never silent again.
+- `stopDictation()` measures the peak amplitude and refuses to transcribe a
+  silent buffer, reporting `No audio from <device name>. Check the microphone
+  and its input level.` instead of the model's useless "No speech was
+  recognized".
+- The file log now covers the whole path (hotkey accept/ignore with the actual
+  modifier flags, recording device, sample count, duration, peak, transcript
+  length, failures), not just insertion.
+
+### Note for the future
+A USB microphone's CoreAudio UID is not stable — it encodes the USB location,
+and vendor software (Elgato Wave Link) replaces the raw device with virtual
+inputs of its own. A stored UID can therefore stop matching without the user
+changing anything.
+
+## 2026-07-06 — High idle CPU after first dictation (12–30 %)
+
+### Issue
+After using WhisperStorm once, the process kept burning 12–30 % CPU while
+idle, even though nothing was being recorded.
+
+### Root cause
+`sample` on the live process showed all the time going into
+QuartzCore/RenderBox display on the main thread — i.e. the waveform. The
+overlay's `TimelineView(.animation)` drives the `Canvas` at display refresh
+rate. When the panel was hidden with `orderOut(nil)`, the `NSHostingView` and
+its SwiftUI hierarchy stayed alive, so the TimelineView kept ticking and the
+Canvas kept re-rendering ~60 fps forever — invisibly. The first dictation
+created the panel; from then on it rendered nonstop.
+
+### Fix
+- `OverlayView`: `TimelineView(.animation(paused: state.phase == .idle))`
+  pauses the timeline whenever the overlay is at rest (defence in depth).
+- `OverlayPanelController`: the SwiftUI content view is now attached lazily in
+  `show()` and **torn down** (`panel.contentView = nil`) after the fade-out
+  completes in the idle state, so no view hierarchy — and no
+  animation/rendering — exists while idle. It is rebuilt on the next show().
+
+### Verification
+Added a temporary env-gated overlay self-test that runs the exact
+recording→transcribing→success→idle cycle without audio, then removed it after
+measuring. Results on the real Release app:
+- CPU **during** the active overlay: ~65 % (animation runs, as intended).
+- CPU **idle after** the cycle: **0.0 %** across repeated samples (was 12–30 %).
+
+
 ## 2026-07-04 — Insertion STILL fails after re-granting Accessibility
 
 ### Issue

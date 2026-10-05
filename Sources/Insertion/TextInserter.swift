@@ -21,8 +21,12 @@ enum TextInserter {
     }
 
     private enum FocusState {
+        /// A focused element was found — via the system-wide element or the
+        /// frontmost app.
         case focused
-        case noFocus
+        /// The Accessibility API did not report one. This does *not* mean
+        /// nothing is focused: Electron/Catalyst apps (VS Code, Slack, …)
+        /// answer with noValue until their AX tree is built.
         case unknown
     }
 
@@ -66,19 +70,13 @@ enum TextInserter {
             )
         }
 
-        // Only skip pasting when we positively know nothing has focus.
-        // Some apps answer the AX query with errors even though a text field
-        // is focused — attempt the paste in that case (harmless at worst).
-        let focus = focusState()
-        FileLog.write("  focusState=\(focus)")
-        if focus == .noFocus {
-            Log.insertion.error("Paste skipped: no focused UI element")
-            FileLog.write("  -> clipboard only: no focused text field")
-            return .clipboardOnly(
-                reason: "No focused text field",
-                accessibilityMissing: false
-            )
-        }
+        // The focus query is diagnostic only — never a gate. The AX API
+        // cannot distinguish "nothing is focused" from "this app does not
+        // expose its focus", so refusing on a negative answer means never
+        // inserting into Electron apps at all. Worst case of pasting anyway
+        // is a Cmd+V that lands nowhere; the text is on the clipboard either
+        // way.
+        FileLog.write("  focusState=\(focusState())")
 
         guard postCmdV() else {
             Log.insertion.error("Paste skipped: could not create CGEvents")
@@ -94,22 +92,27 @@ enum TextInserter {
     }
 
     private static func focusState() -> FocusState {
-        let systemWide = AXUIElementCreateSystemWide()
+        if focusedElement(of: AXUIElementCreateSystemWide()) != nil {
+            return .focused
+        }
+        // The system-wide element stays empty for apps that build their AX
+        // tree lazily — ask the frontmost app itself before giving up.
+        if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+           focusedElement(of: AXUIElementCreateApplication(pid)) != nil {
+            return .focused
+        }
+        return .unknown
+    }
+
+    private static func focusedElement(of element: AXUIElement) -> AXUIElement? {
         var focused: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
-            systemWide,
+            element,
             kAXFocusedUIElementAttribute as CFString,
             &focused
         )
-        switch result {
-        case .success:
-            return focused != nil ? .focused : .noFocus
-        case .noValue:
-            return .noFocus
-        default:
-            Log.insertion.notice("Focused-element query inconclusive (AXError \(result.rawValue, privacy: .public)) — attempting paste anyway")
-            return .unknown
-        }
+        guard result == .success, let focused else { return nil }
+        return (focused as! AXUIElement)
     }
 
     private static func postCmdV() -> Bool {

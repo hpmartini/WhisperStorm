@@ -53,11 +53,24 @@ final class OverlayPanelController {
         hideWorkItem = nil
         let panel = self.panel ?? makePanel()
         self.panel = panel
+        attachContentIfNeeded(to: panel)
         position(panel)
         panel.alphaValue = 1
         if !panel.isVisible {
             panel.orderFrontRegardless()
         }
+    }
+
+    /// Rebuilds the SwiftUI overlay when the panel is shown. The content view
+    /// is torn down on hide (see fadeOut), so the 60 fps TimelineView/Canvas
+    /// only exists while the overlay is actually on screen.
+    private func attachContentIfNeeded(to panel: NSPanel) {
+        guard panel.contentView == nil else { return }
+        let hostingView = NSHostingView(
+            rootView: OverlayView(state: state, levelStore: levelStore)
+        )
+        hostingView.frame = panel.contentRect(forFrameRect: panel.frame)
+        panel.contentView = hostingView
     }
 
     private func scheduleHide(after delay: TimeInterval) {
@@ -76,9 +89,14 @@ final class OverlayPanelController {
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = duration
             panel.animator().alphaValue = 0
-        }, completionHandler: {
+        }, completionHandler: { [weak self] in
             panel.orderOut(nil)
             panel.alphaValue = 1
+            // Tear down the SwiftUI hierarchy so no rendering/animation runs
+            // while idle. It is rebuilt on the next show().
+            if self?.state.phase == .idle {
+                panel.contentView = nil
+            }
         })
     }
 
@@ -98,12 +116,7 @@ final class OverlayPanelController {
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.animationBehavior = .utilityWindow
-
-        let hostingView = NSHostingView(
-            rootView: OverlayView(state: state, levelStore: levelStore)
-        )
-        hostingView.frame = panel.contentRect(forFrameRect: panel.frame)
-        panel.contentView = hostingView
+        // Content view is attached lazily in show() and dropped on hide.
         return panel
     }
 

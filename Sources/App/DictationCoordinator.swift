@@ -27,6 +27,13 @@ final class DictationCoordinator: ObservableObject {
     private var idleResetTask: Task<Void, Never>?
     private var transcriptionTask: Task<Void, Never>?
     private var pttKeyIsDown = false
+    /// Human-readable name of the device the current recording came from,
+    /// so failures can name it instead of just saying "no speech".
+    private var activeDeviceLabel = "the system default input"
+    /// How long `captureEngine.start` blocked for the current recording.
+    /// A stalled device (seen with an Elgato Wave:3) can hold the main actor
+    /// for seconds, so the push-to-talk key-up only arrives afterwards.
+    private var lastStartDuration: TimeInterval = 0
     private var settingsCancellables = Set<AnyCancellable>()
 
     private init() {
@@ -73,7 +80,13 @@ final class DictationCoordinator: ObservableObject {
 
     private func setUpHotkey() {
         KeyboardShortcuts.onKeyDown(for: .dictation) { [weak self] in
+            FileLog.write("HOTKEY down \(Self.modifierDiagnostics())")
             guard let self else { return }
+            guard Self.heldModifiersMatchShortcut() else {
+                FileLog.write("  -> ignored: held modifiers differ from shortcut")
+                return
+            }
+            FileLog.write("  -> accepted, mode=\(settings.dictationMode)")
             switch settings.dictationMode {
             case .toggle:
                 toggleDictation()
@@ -90,12 +103,41 @@ final class DictationCoordinator: ObservableObject {
             }
         }
         KeyboardShortcuts.onKeyUp(for: .dictation) { [weak self] in
+            FileLog.write("HOTKEY up")
             guard let self else { return }
+            // Note: no modifier check on key-up — releasing the trigger key
+            // means at least one registered modifier is already lifting, so
+            // the held flags no longer match. In push-to-talk we must still
+            // stop, otherwise recording would run forever.
             pttKeyIsDown = false
             if settings.dictationMode == .pushToTalk {
                 stopDictation()
             }
         }
+    }
+
+    /// Carbon's `RegisterEventHotKey` (used by KeyboardShortcuts) matches when
+    /// the registered modifiers are *present*, not when they are the *only*
+    /// modifiers held — so ⌥Space also fires under ⌃⌥Space (⌥ is a subset of
+    /// ⌃⌥). Reject that by requiring the currently-held modifiers to equal the
+    /// shortcut's modifiers exactly. Restricted to the four command modifiers
+    /// so Caps Lock, Fn, etc. don't spuriously block the hotkey.
+    private static func heldModifiersMatchShortcut() -> Bool {
+        guard let expected = KeyboardShortcuts.getShortcut(for: .dictation)?.modifiers else {
+            return true
+        }
+        let relevant: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+        let held = NSEvent.modifierFlags.intersection(relevant)
+        return held == expected.intersection(relevant)
+    }
+
+    /// The unified log is unreadable for this app (see TASK.md), so the
+    /// hotkey path reports into the plain file log instead.
+    private static func modifierDiagnostics() -> String {
+        let relevant: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+        let held = NSEvent.modifierFlags.intersection(relevant)
+        let expected = KeyboardShortcuts.getShortcut(for: .dictation)?.modifiers.intersection(relevant)
+        return "held=\(held.rawValue) expected=\(expected.map { String($0.rawValue) } ?? "nil")"
     }
 
     // MARK: - Dictation flow
@@ -112,37 +154,89 @@ final class DictationCoordinator: ObservableObject {
     }
 
     func startDictation() async {
+        FileLog.write("START requested, phase=\(state.phase)")
         switch state.phase {
         case .recording, .transcribing:
+            FileLog.write("  -> ignored: already \(state.phase)")
             return
         case .idle, .success, .error:
             break
         }
         guard await AudioCaptureEngine.requestMicrophoneAccess() else {
+            FileLog.write("  -> microphone access denied")
             reportError("Microphone access denied. Grant it in System Settings > Privacy & Security > Microphone.")
             return
         }
         do {
-            try captureEngine.start(deviceID: resolveCaptureDeviceID())
+            let device = resolveCaptureDevice()
+            activeDeviceLabel = device?.name
+                ?? deviceManager.defaultInputDevice?.name
+                ?? "the system default input"
+            let startedAt = Date()
+            defer { lastStartDuration = Date().timeIntervalSince(startedAt) }
+            try captureEngine.start(deviceID: device?.id)
             idleResetTask?.cancel()
             state.phase = .recording
             installEscMonitors()
             Log.app.info("Recording started")
+            FileLog.write(
+                "  -> recording from \(activeDeviceLabel) "
+                + "(start took \(String(format: "%.2f", Date().timeIntervalSince(startedAt)))s)"
+            )
         } catch {
-            reportError(error.localizedDescription)
+            FileLog.write(
+                "  -> capture start FAILED after \(String(format: "%.2f", lastStartDuration))s: "
+                + error.localizedDescription
+            )
+            if case AudioCaptureEngine.CaptureError.engineStartFailed = error {
+                // The raw CoreAudio text ("avfaudio error 35") tells the user
+                // nothing. This is a device/HAL stall, not an app fault.
+                reportError(
+                    "\(activeDeviceLabel) did not start (\(String(format: "%.0f", lastStartDuration)) s). "
+                    + "Replug it or pick another microphone in Settings."
+                )
+            } else {
+                reportError(error.localizedDescription)
+            }
         }
     }
 
     func stopDictation() {
-        guard state.phase == .recording else { return }
+        guard state.phase == .recording else {
+            FileLog.write("STOP ignored, phase=\(state.phase)")
+            return
+        }
         removeEscMonitors()
         let samples = captureEngine.stop()
         let duration = Double(samples.count) / AudioCaptureEngine.targetSampleRate
         Log.app.info("Recording stopped: \(samples.count) samples (\(duration, format: .fixed(precision: 2)) s)")
 
         // Accidental tap: nothing worth transcribing, bail out quietly.
+        let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
+        FileLog.write(
+            "STOP samples=\(samples.count) duration=\(String(format: "%.2f", duration))s "
+            + "peak=\(String(format: "%.4f", peak)) device=\(activeDeviceLabel)"
+        )
         guard duration >= 0.35 else {
-            state.phase = .idle
+            FileLog.write("  -> discarded: shorter than 0.35 s")
+            // If the device took seconds to start, the key was held long
+            // enough — the stall ate the recording. Don't discard silently.
+            if lastStartDuration >= Self.slowStartThreshold {
+                reportError(
+                    "\(activeDeviceLabel) took \(String(format: "%.0f", lastStartDuration)) s to start, "
+                    + "nothing was recorded. Replug it or pick another microphone."
+                )
+            } else {
+                state.phase = .idle
+            }
+            return
+        }
+
+        // A silent buffer would reach the model and come back as the useless
+        // "No speech was recognized" — name the device that produced it instead.
+        guard peak >= Self.silenceThreshold else {
+            FileLog.write("  -> silent recording, not transcribing")
+            reportError("No audio from \(activeDeviceLabel). Check the microphone and its input level.")
             return
         }
 
@@ -186,6 +280,7 @@ final class DictationCoordinator: ObservableObject {
             let text = try await provider.transcribe(request)
             Log.transcription.info("Transcribed \(request.duration, format: .fixed(precision: 1)) s of audio in \(Date().timeIntervalSince(started), format: .fixed(precision: 1)) s")
 
+            FileLog.write("TRANSCRIBED chars=\(text.count)")
             state.lastTranscript = text
             let outcome = TextInserter.insert(text)
             state.phase = .success
@@ -204,6 +299,7 @@ final class DictationCoordinator: ObservableObject {
             }
             scheduleReturnToIdle(after: 0.8)
         } catch {
+            FileLog.write("TRANSCRIPTION FAILED: \(error.localizedDescription)")
             reportError(error.localizedDescription)
         }
     }
@@ -278,17 +374,36 @@ final class DictationCoordinator: ObservableObject {
 
     /// Resolves the persisted microphone selection to a live device, falling
     /// back to the system default (with a notification) when it is gone.
-    private func resolveCaptureDeviceID() -> AudioDeviceID? {
+    /// Resolves the microphone to record from. Falls back to the system
+    /// default when the selected device is gone — which happens silently
+    /// whenever a USB mic's CoreAudio UID changes (a different port, or
+    /// vendor software such as Elgato Wave Link claiming the raw device and
+    /// replacing it with its own virtual inputs). The fallback is surfaced in
+    /// the overlay as well, because recording from an unexpected device looks
+    /// exactly like a broken app.
+    private func resolveCaptureDevice() -> AudioInputDevice? {
+        state.captureNotice = nil
         guard let uid = settings.selectedMicrophoneUID else { return nil }
         if let device = deviceManager.device(withUID: uid) {
-            return device.id
+            return device
         }
+        let fallback = deviceManager.defaultInputDevice?.name ?? "the system default input"
+        state.captureNotice = "Selected mic unavailable — using \(fallback)"
+        FileLog.write("  -> selected mic (uid=\(uid)) not present, falling back")
         NotificationManager.shared.post(
             title: "Microphone unavailable",
-            body: "The selected microphone is not connected. Using the system default instead."
+            body: "The microphone selected in WhisperStorm is not available. Recording from \(fallback) instead — pick another device in Settings."
         )
         return nil
     }
+
+    /// Peak amplitude below which a recording is treated as silence
+    /// (≈ −54 dBFS): far under any live microphone's room noise.
+    private static let silenceThreshold: Float = 0.002
+
+    /// Capture start normally takes well under a second; beyond this the
+    /// device is stalling and the start itself becomes the problem.
+    private static let slowStartThreshold: TimeInterval = 2
 
     private func handleDeviceListChange() {
         guard state.phase == .recording,

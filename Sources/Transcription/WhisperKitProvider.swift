@@ -37,19 +37,44 @@ actor WhisperKitProvider: TranscriptionProvider {
         }
         let pipe = try await loadPipelineIfNeeded()
 
+        Self.dumpRecording(request.samples)
+        FileLog.write("  WHISPER in: \(Self.levelDescription(request.samples)) lang=\(request.languageCode ?? "auto")")
+
+        let text = try await run(pipe, request: request, chunking: .vad, label: "vad")
+        if !text.isEmpty {
+            return text
+        }
+
+        // VAD chunking drops audio it does not consider speech — which happens
+        // with quiet input (a distant built-in mic). Retry once on the raw
+        // buffer before giving up, so a usable recording is not thrown away.
+        let unchunked = try await run(pipe, request: request, chunking: nil, label: "no-vad")
+        guard !unchunked.isEmpty else {
+            throw TranscriptionError.emptyResult
+        }
+        return unchunked
+    }
+
+    private func run(
+        _ pipe: WhisperKit,
+        request: TranscriptionRequest,
+        chunking: ChunkingStrategy?,
+        label: String
+    ) async throws -> String {
         let options = DecodingOptions(
             task: .transcribe,
             language: request.languageCode,
             detectLanguage: request.languageCode == nil,
             skipSpecialTokens: true,
             withoutTimestamps: true,
-            chunkingStrategy: .vad
+            chunkingStrategy: chunking
         )
 
         let results: [TranscriptionResult]
         do {
             results = try await pipe.transcribe(audioArray: request.samples, decodeOptions: options)
         } catch {
+            FileLog.write("  WHISPER \(label) threw: \(error.localizedDescription)")
             throw TranscriptionError.modelLoadFailed(error.localizedDescription)
         }
 
@@ -57,10 +82,27 @@ actor WhisperKitProvider: TranscriptionProvider {
             .map(\.text)
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
-            throw TranscriptionError.emptyResult
-        }
+        FileLog.write("  WHISPER \(label): segments=\(results.count) chars=\(text.count)")
         return text
+    }
+
+    /// Peak and RMS of the buffer actually handed to the model, in dBFS.
+    nonisolated private static func levelDescription(_ samples: [Float]) -> String {
+        guard !samples.isEmpty else { return "empty" }
+        let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
+        let rms = (samples.reduce(Float(0)) { $0 + $1 * $1 } / Float(samples.count)).squareRoot()
+        func dB(_ value: Float) -> String {
+            value <= 0 ? "-inf" : String(format: "%.1f", 20 * log10(value))
+        }
+        return "\(samples.count) samples peak=\(dB(peak))dBFS rms=\(dB(rms))dBFS"
+    }
+
+    /// Writes the exact 16 kHz buffer sent to the model next to the log, so a
+    /// failed transcription can be listened to instead of guessed about.
+    nonisolated private static func dumpRecording(_ samples: [Float]) {
+        let url = FileLog.url.deletingLastPathComponent()
+            .appending(path: "WhisperStorm-last-recording.wav")
+        try? WAVEncoder.encode(samples: samples).write(to: url)
     }
 
     private func loadPipelineIfNeeded() async throws -> WhisperKit {

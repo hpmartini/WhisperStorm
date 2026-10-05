@@ -21,6 +21,10 @@ final class AppState: ObservableObject {
     /// Extra context shown in the overlay during .transcribing
     /// (e.g. "Preparing model…" while CoreML specializes on first load).
     @Published var statusDetail: String?
+    /// Warning shown in the overlay during .recording — currently only the
+    /// fallback to the system default input when the selected microphone is
+    /// gone. Recording from an unexpected device must never be silent.
+    @Published var captureNotice: String?
 
     var menuBarSymbolName: String {
         switch phase {
