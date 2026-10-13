@@ -20,20 +20,26 @@ struct SettingsView: View {
 struct GeneralSettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var launchAtLogin = LaunchAtLoginModel()
+    /// Last accepted binding per shortcut, restored when a new one clashes.
+    @State private var lastValidShortcut: [KeyboardShortcuts.Name: KeyboardShortcuts.Shortcut] = [:]
+    @State private var shortcutConflict: String?
 
     var body: some View {
         Form {
-            KeyboardShortcuts.Recorder("Dictation shortcut:", name: .dictation)
+            shortcutRecorder("Toggle shortcut:", .toggleDictation, other: .pushToTalk, otherTitle: "push-to-talk")
+            Text("Press once to start recording, press again to stop and transcribe.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
 
-            Picker("Dictation mode:", selection: $settings.dictationMode) {
-                ForEach(DictationMode.allCases) { mode in
-                    Text(mode.displayName).tag(mode)
-                }
+            shortcutRecorder("Push-to-talk shortcut:", .pushToTalk, other: .toggleDictation, otherTitle: "toggle")
+            if let shortcutConflict {
+                Text(shortcutConflict)
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
-            .pickerStyle(.radioGroup)
-
-            Text(settings.dictationMode == .toggle
-                 ? "Press once to start recording, press again to stop and transcribe."
+            Toggle("Tap push-to-talk shortcut to toggle", isOn: $settings.pushToTalkTapToggles)
+            Text(settings.pushToTalkTapToggles
+                 ? "Hold to record, release to transcribe. A short tap starts recording; tap again to stop."
                  : "Hold the shortcut to record, release to transcribe.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -56,6 +62,26 @@ struct GeneralSettingsView: View {
             }
         }
         .padding(20)
+    }
+
+    /// KeyboardShortcuts only rejects system and menu shortcuts, not a clash
+    /// between our own two — one key would then fire both handlers.
+    private func shortcutRecorder(
+        _ title: String,
+        _ name: KeyboardShortcuts.Name,
+        other: KeyboardShortcuts.Name,
+        otherTitle: String
+    ) -> some View {
+        KeyboardShortcuts.Recorder(title, name: name) { newShortcut in
+            if let newShortcut, newShortcut == KeyboardShortcuts.getShortcut(for: other) {
+                KeyboardShortcuts.setShortcut(lastValidShortcut[name], for: name)
+                shortcutConflict = "\(newShortcut) is already the \(otherTitle) shortcut."
+            } else {
+                lastValidShortcut[name] = newShortcut
+                shortcutConflict = nil
+            }
+        }
+        .onAppear { lastValidShortcut[name] = KeyboardShortcuts.getShortcut(for: name) }
     }
 }
 

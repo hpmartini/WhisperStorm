@@ -1,20 +1,6 @@
 import Foundation
 import SwiftUI
 
-enum DictationMode: String, CaseIterable, Identifiable {
-    case toggle
-    case pushToTalk
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .toggle: "Toggle"
-        case .pushToTalk: "Push to Talk"
-        }
-    }
-}
-
 enum TranscriptionLanguage: String, CaseIterable, Identifiable {
     case auto
     case german
@@ -60,7 +46,7 @@ final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
     private enum Keys {
-        static let dictationMode = "dictationMode"
+        static let pushToTalkTapToggles = "pushToTalkTapToggles"
         static let language = "transcriptionLanguage"
         static let providerKind = "transcriptionProviderKind"
         static let whisperKitModel = "whisperKitModel"
@@ -75,8 +61,10 @@ final class AppSettings: ObservableObject {
 
     private let defaults: UserDefaults
 
-    @Published var dictationMode: DictationMode {
-        didSet { defaults.set(dictationMode.rawValue, forKey: Keys.dictationMode) }
+    /// A short tap on the push-to-talk shortcut latches recording on; the
+    /// next tap stops it. Holding still works as push-to-talk.
+    @Published var pushToTalkTapToggles: Bool {
+        didSet { defaults.set(pushToTalkTapToggles, forKey: Keys.pushToTalkTapToggles) }
     }
 
     @Published var language: TranscriptionLanguage {
@@ -112,8 +100,7 @@ final class AppSettings: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        dictationMode = defaults.string(forKey: Keys.dictationMode)
-            .flatMap(DictationMode.init(rawValue:)) ?? .toggle
+        pushToTalkTapToggles = defaults.bool(forKey: Keys.pushToTalkTapToggles)
         language = defaults.string(forKey: Keys.language)
             .flatMap(TranscriptionLanguage.init(rawValue:)) ?? .auto
         providerKind = defaults.string(forKey: Keys.providerKind)

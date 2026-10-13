@@ -20,7 +20,7 @@ struct WhisperKitModelListView: View {
                 .foregroundStyle(.orange)
             }
 
-            Text("Activating a model for the first time optimizes it for this Mac — a one-time step that can take several minutes for large models. WhisperStorm does this in the background right after download or activation.")
+            Text("Activating a model optimizes it for this Mac — again after each new app build or macOS update — which can take several minutes for large models. WhisperStorm does this in the background right after download or activation.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -86,10 +86,10 @@ private struct ModelRow: View {
                 if modelManager.preparingVariant == model.variant {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Optimizing…")
+                    Text("Loading model…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .help("One-time CoreML optimization for this Mac — can take several minutes for large models.")
+                        .help("The first load after a new app build or a macOS update optimizes the model for this Mac — up to ~20 minutes for large models. Later loads take seconds.")
                 } else if isActive {
                     Label("Active", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)

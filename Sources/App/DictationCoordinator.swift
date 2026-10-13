@@ -27,6 +27,13 @@ final class DictationCoordinator: ObservableObject {
     private var idleResetTask: Task<Void, Never>?
     private var transcriptionTask: Task<Void, Never>?
     private var pttKeyIsDown = false
+    private var pttKeyDownAt = Date.distantPast
+    /// Recording was started by a short tap on the push-to-talk key (with
+    /// "tap to toggle" on) and keeps running until the next tap.
+    private var pttLatched = false
+    /// The key-down that stopped a latched recording also produces a key-up,
+    /// which must not be treated as a push-to-talk release.
+    private var pttIgnoreNextKeyUp = false
     /// Human-readable name of the device the current recording came from,
     /// so failures can name it instead of just saying "no speech".
     private var activeDeviceLabel = "the system default input"
@@ -47,6 +54,8 @@ final class DictationCoordinator: ObservableObject {
         modelManager.onModelDownloaded = { [weak self] variant in
             self?.warmUpWhisperModelIfActive(variant)
         }
+        KeyboardShortcuts.Name.migrateLegacyDictationMode()
+        KeyboardShortcuts.Name.unbindPushToTalkIfDuplicate()
         setUpHotkey()
         setUpModelWarmUp()
     }
@@ -79,65 +88,78 @@ final class DictationCoordinator: ObservableObject {
     // MARK: - Hotkey
 
     private func setUpHotkey() {
-        KeyboardShortcuts.onKeyDown(for: .dictation) { [weak self] in
-            FileLog.write("HOTKEY down \(Self.modifierDiagnostics())")
-            guard let self else { return }
-            guard Self.heldModifiersMatchShortcut() else {
-                FileLog.write("  -> ignored: held modifiers differ from shortcut")
+        KeyboardShortcuts.onKeyDown(for: .toggleDictation) { [weak self] in
+            guard let self, Self.accepts(.toggleDictation, event: "TOGGLE down") else { return }
+            toggleDictation()
+        }
+        KeyboardShortcuts.onKeyDown(for: .pushToTalk) { [weak self] in
+            guard let self, Self.accepts(.pushToTalk, event: "PTT down") else { return }
+            if pttLatched, state.phase == .recording {
+                pttLatched = false
+                pttIgnoreNextKeyUp = true
+                stopDictation()
                 return
             }
-            FileLog.write("  -> accepted, mode=\(settings.dictationMode)")
-            switch settings.dictationMode {
-            case .toggle:
-                toggleDictation()
-            case .pushToTalk:
-                pttKeyIsDown = true
-                Task {
-                    await self.startDictation()
-                    // The key may already be released by the time the audio
-                    // engine is running — stop right away in that case.
-                    if !self.pttKeyIsDown, self.settings.dictationMode == .pushToTalk {
-                        self.stopDictation()
-                    }
+            pttLatched = false
+            pttKeyIsDown = true
+            pttKeyDownAt = Date()
+            Task {
+                await self.startDictation()
+                // The key may already be released by the time the audio
+                // engine is running — stop right away unless a tap latched it.
+                if !self.pttKeyIsDown, !self.pttLatched {
+                    self.stopDictation()
                 }
             }
         }
-        KeyboardShortcuts.onKeyUp(for: .dictation) { [weak self] in
-            FileLog.write("HOTKEY up")
+        KeyboardShortcuts.onKeyUp(for: .pushToTalk) { [weak self] in
+            FileLog.write("PTT up")
             guard let self else { return }
             // Note: no modifier check on key-up — releasing the trigger key
             // means at least one registered modifier is already lifting, so
-            // the held flags no longer match. In push-to-talk we must still
-            // stop, otherwise recording would run forever.
+            // the held flags no longer match. We must still stop, otherwise
+            // recording would run forever.
             pttKeyIsDown = false
-            if settings.dictationMode == .pushToTalk {
-                stopDictation()
+            if pttIgnoreNextKeyUp {
+                pttIgnoreNextKeyUp = false
+                return
             }
+            // This handler can run late (capture start blocks the main actor
+            // for ~0.5 s), so take the release time from the HID event clock.
+            let releasedAt = Date().addingTimeInterval(
+                -CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: .keyUp)
+            )
+            if settings.pushToTalkTapToggles,
+               releasedAt.timeIntervalSince(pttKeyDownAt) < Self.tapThreshold {
+                pttLatched = true
+                FileLog.write("  -> tap: recording latched")
+                return
+            }
+            stopDictation()
         }
     }
 
-    /// Carbon's `RegisterEventHotKey` (used by KeyboardShortcuts) matches when
-    /// the registered modifiers are *present*, not when they are the *only*
-    /// modifiers held — so ⌥Space also fires under ⌃⌥Space (⌥ is a subset of
-    /// ⌃⌥). Reject that by requiring the currently-held modifiers to equal the
-    /// shortcut's modifiers exactly. Restricted to the four command modifiers
-    /// so Caps Lock, Fn, etc. don't spuriously block the hotkey.
-    private static func heldModifiersMatchShortcut() -> Bool {
-        guard let expected = KeyboardShortcuts.getShortcut(for: .dictation)?.modifiers else {
-            return true
-        }
-        let relevant: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
-        let held = NSEvent.modifierFlags.intersection(relevant)
-        return held == expected.intersection(relevant)
-    }
+    /// Key-down shorter than this counts as a tap, not a hold.
+    private static let tapThreshold: TimeInterval = 0.3
 
-    /// The unified log is unreadable for this app (see TASK.md), so the
-    /// hotkey path reports into the plain file log instead.
-    private static func modifierDiagnostics() -> String {
+    /// Logs the key-down and checks its modifiers. Carbon's
+    /// `RegisterEventHotKey` (used by KeyboardShortcuts) matches when the
+    /// registered modifiers are *present*, not when they are the *only*
+    /// modifiers held — so ⌥Space also fires under ⌃⌥Space. Reject that by
+    /// requiring the held modifiers to equal the shortcut's exactly.
+    /// Restricted to the four command modifiers so Caps Lock, Fn, etc. don't
+    /// spuriously block the hotkey. (The unified log is unreadable for this
+    /// app, see TASK.md, hence the file log.)
+    private static func accepts(_ name: KeyboardShortcuts.Name, event: String) -> Bool {
         let relevant: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
         let held = NSEvent.modifierFlags.intersection(relevant)
-        let expected = KeyboardShortcuts.getShortcut(for: .dictation)?.modifiers.intersection(relevant)
-        return "held=\(held.rawValue) expected=\(expected.map { String($0.rawValue) } ?? "nil")"
+        let expected = KeyboardShortcuts.getShortcut(for: name)?.modifiers.intersection(relevant)
+        FileLog.write("\(event) held=\(held.rawValue) expected=\(expected.map { String($0.rawValue) } ?? "nil")")
+        guard expected == nil || held == expected else {
+            FileLog.write("  -> ignored: held modifiers differ from shortcut")
+            return false
+        }
+        return true
     }
 
     // MARK: - Dictation flow
@@ -270,7 +292,7 @@ final class DictationCoordinator: ObservableObject {
             // Surface expensive one-time model loading instead of letting the
             // overlay claim "Transcribing…" for minutes.
             if settings.providerKind == .whisperKit, await !whisperProvider.isReady {
-                state.statusDetail = "Preparing model — one-time, can take minutes…"
+                state.statusDetail = "Loading model…"
                 modelManager.preparingVariant = settings.whisperKitModel
             }
             try await provider.prepare()

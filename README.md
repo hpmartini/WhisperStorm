@@ -55,9 +55,9 @@ Models are stored in `~/Library/Application Support/WhisperStorm/models`. After 
 
 ## Usage
 
-- Press **⌥ Space** (configurable in Settings > General) in any app.
-- **Toggle** mode (default): press once to record, press again to stop and transcribe.
-- **Push to Talk** mode: hold the shortcut while speaking, release to transcribe.
+Two shortcuts, both configurable in Settings > General:
+- **Toggle** (default **⌥ Space**): press once to record, press again to stop and transcribe.
+- **Push to Talk** (unbound by default): hold while speaking, release to transcribe. With *Tap push-to-talk shortcut to toggle* on, a short tap (< 0.3 s) starts recording and the next tap stops it.
 - **Esc** while recording cancels — nothing is inserted, the clipboard is untouched.
 - The waveform overlay at the bottom of the screen never steals focus from your app.
 - After transcription the text is **copied to the clipboard** (and stays there) and **pasted** into the focused text field. If nothing has keyboard focus, you get a "Copied to clipboard" notification instead.

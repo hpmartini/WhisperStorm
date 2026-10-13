@@ -7,6 +7,9 @@ enum CyberpunkPalette {
     static let violet = Color(red: 0.478, green: 0.169, blue: 1.0)
     static let errorRed = Color(red: 1.0, green: 0.22, blue: 0.29)
     static let errorOrange = Color(red: 1.0, green: 0.45, blue: 0.15)
+    /// Overlay tint opacity — lower = more see-through, less text contrast.
+    static let backgroundOpacity = 0.85
+    static let background = Color(red: 0.04, green: 0.03, blue: 0.09).opacity(backgroundOpacity)
 
     static let waveGradient = Gradient(colors: [cyan, magenta, violet])
     static let errorGradient = Gradient(colors: [errorRed, errorOrange, errorRed])
@@ -20,10 +23,13 @@ struct OverlayView: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
+                // Dark blur + dark tint: see-through, yet the text keeps its
+                // contrast even over white windows (plain light material went grey).
                 .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(Color.black.opacity(0.55))
+                        .fill(CyberpunkPalette.background)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -33,9 +39,8 @@ struct OverlayView: View {
                                 startPoint: .leading,
                                 endPoint: .trailing
                             ),
-                            lineWidth: 1
+                            lineWidth: 1.5
                         )
-                        .opacity(0.45)
                 )
 
             VStack(spacing: 4) {
@@ -66,7 +71,7 @@ struct OverlayView: View {
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(
                     state.captureNotice == nil
-                        ? CyberpunkPalette.cyan.opacity(0.65)
+                        ? CyberpunkPalette.cyan
                         : CyberpunkPalette.errorRed
                 )
                 .lineLimit(1)
@@ -75,7 +80,7 @@ struct OverlayView: View {
         case .transcribing:
             Text(state.statusDetail ?? "Transcribing…")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(CyberpunkPalette.magenta.opacity(0.85))
+                .foregroundStyle(CyberpunkPalette.magenta)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .padding(.horizontal, 12)
