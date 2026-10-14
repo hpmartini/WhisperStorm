@@ -50,6 +50,7 @@ targets:
         # No App Sandbox: CGEvent posting and AXIsProcessTrusted require a non-sandboxed process.
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Stable self-signed identity so the Accessibility/TCC grant survives
         # rebuilds. Ad-hoc signing ("-") changes the cdhash every build, which
         # silently invalidates the grant and breaks text insertion.
