@@ -19,6 +19,7 @@ struct SettingsView: View {
 
 struct GeneralSettingsView: View {
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var coordinator: DictationCoordinator
     @StateObject private var launchAtLogin = LaunchAtLoginModel()
     /// Last accepted binding per shortcut, restored when a new one clashes.
     @State private var lastValidShortcut: [KeyboardShortcuts.Name: KeyboardShortcuts.Shortcut] = [:]
@@ -76,6 +77,10 @@ struct GeneralSettingsView: View {
             }
         }
         .padding(20)
+        // The real overlay is the preview: the window-server blur cannot be
+        // shown by a copy inside this window.
+        .onAppear { coordinator.state.overlayPreview = true }
+        .onDisappear { coordinator.state.overlayPreview = false }
     }
 
     /// KeyboardShortcuts only rejects system and menu shortcuts, not a clash

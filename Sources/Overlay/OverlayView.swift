@@ -96,6 +96,10 @@ struct OverlayView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .padding(.horizontal, 16)
+        case .idle where state.overlayPreview:
+            Text("Preview — adjust in Settings")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(CyberpunkPalette.cyan)
         case .success, .idle:
             Text("")
                 .font(.system(size: 11))
@@ -131,7 +135,7 @@ private struct WaveformCanvas: View {
     /// the brief success/error tail. In `.idle` the panel is hidden, so there
     /// is nothing to animate.
     private var isPaused: Bool {
-        state.phase == .idle
+        state.phase == .idle && !state.overlayPreview
     }
 }
 

@@ -30,6 +30,7 @@ final class OverlayPanelController {
     private var hideWorkItem: DispatchWorkItem?
     private var phaseCancellable: AnyCancellable?
     private var blurCancellable: AnyCancellable?
+    private var previewCancellable: AnyCancellable?
 
     init(state: AppState, levelStore: AudioLevelStore) {
         self.state = state
@@ -38,6 +39,13 @@ final class OverlayPanelController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] phase in
                 self?.handlePhase(phase)
+            }
+        previewCancellable = state.$overlayPreview
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, state.phase == .idle else { return }
+                handlePhase(.idle)
             }
         // Live update while the settings slider or glass toggle changes.
         // Liquid Glass blurs on its own, so the window blur is off then.
@@ -61,7 +69,11 @@ final class OverlayPanelController {
             show()
             scheduleHide(after: 3.5)
         case .idle:
-            fadeOut()
+            if state.overlayPreview {
+                show()
+            } else {
+                fadeOut()
+            }
         }
     }
 
@@ -124,6 +136,11 @@ final class OverlayPanelController {
             context.duration = duration
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
+            // The preview was switched on while fading: stay on screen.
+            if let self, state.phase == .idle, state.overlayPreview {
+                panel.alphaValue = 1
+                return
+            }
             panel.orderOut(nil)
             panel.alphaValue = 1
             // Tear down the SwiftUI hierarchy so no rendering/animation runs
