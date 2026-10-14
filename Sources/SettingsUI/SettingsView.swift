@@ -44,6 +44,16 @@ struct GeneralSettingsView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
+            Slider(value: $settings.overlayOpacity, in: 0...1) {
+                Text("Overlay opacity:")
+            }
+            Slider(value: $settings.overlayBlurRadius, in: 0...40) {
+                Text("Overlay blur:")
+            }
+            Text("Opacity darkens the overlay, blur softens what is behind it. Low values of both make text harder to read over light windows.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
             Picker("Language:", selection: $settings.language) {
                 ForEach(TranscriptionLanguage.allCases) { language in
                     Text(language.displayName).tag(language)

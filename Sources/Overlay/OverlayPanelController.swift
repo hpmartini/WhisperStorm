@@ -2,6 +2,16 @@ import AppKit
 import Combine
 import SwiftUI
 
+// Private SkyLight SPI (also used by iTerm2): a real, tint-free blur of what
+// is behind the window. NSVisualEffectView has no radius and its alphaValue
+// only fades the tint while the blur switches off (see TASK.md). Fine here:
+// the app is not sandboxed and not shipped through the App Store.
+private typealias CGSConnectionID = UInt32
+@_silgen_name("CGSDefaultConnectionForThread")
+private func CGSDefaultConnectionForThread() -> CGSConnectionID
+@_silgen_name("CGSSetWindowBackgroundBlurRadius")
+private func CGSSetWindowBackgroundBlurRadius(_ connection: CGSConnectionID, _ windowNumber: Int, _ radius: Int) -> Int32
+
 /// Owns the borderless, non-activating overlay panel that shows the waveform.
 /// The panel never steals focus from the frontmost app: it uses
 /// `.nonactivatingPanel`, ignores mouse events and is shown with
@@ -19,6 +29,7 @@ final class OverlayPanelController {
     private var panel: NSPanel?
     private var hideWorkItem: DispatchWorkItem?
     private var phaseCancellable: AnyCancellable?
+    private var blurCancellable: AnyCancellable?
 
     init(state: AppState, levelStore: AudioLevelStore) {
         self.state = state
@@ -27,6 +38,11 @@ final class OverlayPanelController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] phase in
                 self?.handlePhase(phase)
+            }
+        // Live update while the settings slider moves.
+        blurCancellable = AppSettings.shared.$overlayBlurRadius
+            .sink { [weak self] radius in
+                self?.applyBlur(radius: radius)
             }
     }
 
@@ -58,6 +74,17 @@ final class OverlayPanelController {
         panel.alphaValue = 1
         if !panel.isVisible {
             panel.orderFrontRegardless()
+        }
+        applyBlur(radius: AppSettings.shared.overlayBlurRadius)
+    }
+
+    private func applyBlur(radius: Double) {
+        guard let panel, panel.windowNumber > 0 else { return }
+        let status = CGSSetWindowBackgroundBlurRadius(
+            CGSDefaultConnectionForThread(), panel.windowNumber, Int(radius)
+        )
+        if status != 0 {
+            FileLog.write("OVERLAY blur radius \(Int(radius)) failed: CGError \(status)")
         }
     }
 

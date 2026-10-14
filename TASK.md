@@ -1,5 +1,34 @@
 # TASK.md — Issue Log
 
+## 2026-10-14 — Overlay "blur" setting only darkens, never blurs
+
+### Issue
+The overlay blur slider looked exactly like the opacity slider: the window behind
+the overlay got darker, but its text stayed perfectly sharp.
+
+### Root cause
+The blur was an `NSVisualEffectView` (`.hudWindow`, `.behindWindow`) whose
+`alphaValue` the slider set. A side-by-side test panel on the real screen showed:
+- alpha 1.0: fully opaque dark grey — the HUD material's own tint hides everything;
+- alpha 0.5: no blur at all, background text sharp, only darkened.
+
+So `alphaValue < 1` turns the backdrop blur off and only fades the tint.
+`NSVisualEffectView` and SwiftUI `Material` expose no blur radius either.
+
+### Fix
+- Blur now comes from the private SkyLight call
+  `CGSSetWindowBackgroundBlurRadius` (the one iTerm2 uses), applied to the
+  overlay panel in `OverlayPanelController.show()` and live while the slider
+  moves. Same test: a real blur, rounded corners intact, no tint.
+- Setting is now `overlayBlurRadius` (0–40 pt, default 20); opacity stays a
+  separate navy tint (`overlayOpacity`).
+- A failing call is logged (`OVERLAY blur radius … failed`) in the file log.
+
+### Risk
+Private API: may change in a future macOS. Acceptable because the app is not
+sandboxed and not distributed via the App Store. If it breaks, the overlay
+falls back to tint only.
+
 ## 2026-10-02 — "The audio engine failed to start … avfaudio error 35"
 
 ### Issue

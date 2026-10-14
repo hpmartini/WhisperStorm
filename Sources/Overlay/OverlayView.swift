@@ -7,9 +7,8 @@ enum CyberpunkPalette {
     static let violet = Color(red: 0.478, green: 0.169, blue: 1.0)
     static let errorRed = Color(red: 1.0, green: 0.22, blue: 0.29)
     static let errorOrange = Color(red: 1.0, green: 0.45, blue: 0.15)
-    /// Overlay tint opacity — lower = more see-through, less text contrast.
-    static let backgroundOpacity = 0.85
-    static let background = Color(red: 0.04, green: 0.03, blue: 0.09).opacity(backgroundOpacity)
+    /// Overlay tint; its opacity is a user setting.
+    static let background = Color(red: 0.04, green: 0.03, blue: 0.09)
 
     static let waveGradient = Gradient(colors: [cyan, magenta, violet])
     static let errorGradient = Gradient(colors: [errorRed, errorOrange, errorRed])
@@ -19,18 +18,12 @@ enum CyberpunkPalette {
 struct OverlayView: View {
     @ObservedObject var state: AppState
     let levelStore: AudioLevelStore
+    @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                // Dark blur + dark tint: see-through, yet the text keeps its
-                // contrast even over white windows (plain light material went grey).
-                .fill(.ultraThinMaterial)
-                .environment(\.colorScheme, .dark)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(CyberpunkPalette.background)
-                )
+                .fill(CyberpunkPalette.background.opacity(settings.overlayOpacity))
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .strokeBorder(

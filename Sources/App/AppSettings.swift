@@ -54,6 +54,8 @@ final class AppSettings: ObservableObject {
         static let endpointModelName = "openAIEndpointModelName"
         static let selectedMicrophoneUID = "selectedMicrophoneUID"
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
+        static let overlayOpacity = "overlayOpacity"
+        static let overlayBlurRadius = "overlayBlurRadius"
     }
 
     nonisolated static let defaultWhisperKitModel = "openai_whisper-small"
@@ -94,6 +96,16 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(selectedMicrophoneUID, forKey: Keys.selectedMicrophoneUID) }
     }
 
+    /// Overlay background tint opacity, 0…1.
+    @Published var overlayOpacity: Double {
+        didSet { defaults.set(overlayOpacity, forKey: Keys.overlayOpacity) }
+    }
+
+    /// Blur radius (points) of what is behind the overlay; 0 = no blur.
+    @Published var overlayBlurRadius: Double {
+        didSet { defaults.set(overlayBlurRadius, forKey: Keys.overlayBlurRadius) }
+    }
+
     @Published var hasCompletedOnboarding: Bool {
         didSet { defaults.set(hasCompletedOnboarding, forKey: Keys.hasCompletedOnboarding) }
     }
@@ -110,5 +122,7 @@ final class AppSettings: ObservableObject {
         endpointModelName = defaults.string(forKey: Keys.endpointModelName) ?? "Systran/faster-whisper-small"
         selectedMicrophoneUID = defaults.string(forKey: Keys.selectedMicrophoneUID)
         hasCompletedOnboarding = defaults.bool(forKey: Keys.hasCompletedOnboarding)
+        overlayOpacity = defaults.object(forKey: Keys.overlayOpacity) as? Double ?? 0.5
+        overlayBlurRadius = defaults.object(forKey: Keys.overlayBlurRadius) as? Double ?? 20
     }
 }
