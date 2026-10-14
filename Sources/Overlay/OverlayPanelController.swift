@@ -39,10 +39,13 @@ final class OverlayPanelController {
             .sink { [weak self] phase in
                 self?.handlePhase(phase)
             }
-        // Live update while the settings slider moves.
+        // Live update while the settings slider or glass toggle changes.
+        // Liquid Glass blurs on its own, so the window blur is off then.
         blurCancellable = AppSettings.shared.$overlayBlurRadius
-            .sink { [weak self] radius in
-                self?.applyBlur(radius: radius)
+            .combineLatest(AppSettings.shared.$overlayLiquidGlass)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.applyBlur(radius: Self.effectiveBlurRadius)
             }
     }
 
@@ -75,7 +78,11 @@ final class OverlayPanelController {
         if !panel.isVisible {
             panel.orderFrontRegardless()
         }
-        applyBlur(radius: AppSettings.shared.overlayBlurRadius)
+        applyBlur(radius: Self.effectiveBlurRadius)
+    }
+
+    private static var effectiveBlurRadius: Double {
+        AppSettings.shared.usesLiquidGlass ? 0 : AppSettings.shared.overlayBlurRadius
     }
 
     private func applyBlur(radius: Double) {
@@ -143,6 +150,9 @@ final class OverlayPanelController {
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.animationBehavior = .utilityWindow
+        // The overlay is always dark-styled; in light mode Liquid Glass turns
+        // milky white and the neon text becomes unreadable.
+        panel.appearance = NSAppearance(named: .darkAqua)
         // Content view is attached lazily in show() and dropped on hide.
         return panel
     }

@@ -44,13 +44,17 @@ struct GeneralSettingsView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
+            if #available(macOS 26, *) {
+                Toggle("Liquid Glass overlay", isOn: $settings.overlayLiquidGlass)
+            }
             Slider(value: $settings.overlayOpacity, in: 0...1) {
                 Text("Overlay opacity:")
             }
             Slider(value: $settings.overlayBlurRadius, in: 0...40) {
                 Text("Overlay blur:")
             }
-            Text("Opacity darkens the overlay, blur softens what is behind it. Low values of both make text harder to read over light windows.")
+            .disabled(settings.usesLiquidGlass)
+            Text("Opacity tints the overlay, blur softens what is behind it (Liquid Glass brings its own). Low values make text harder to read over light windows.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 

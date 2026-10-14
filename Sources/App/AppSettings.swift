@@ -56,6 +56,7 @@ final class AppSettings: ObservableObject {
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
         static let overlayOpacity = "overlayOpacity"
         static let overlayBlurRadius = "overlayBlurRadius"
+        static let overlayLiquidGlass = "overlayLiquidGlass"
     }
 
     nonisolated static let defaultWhisperKitModel = "openai_whisper-small"
@@ -106,6 +107,17 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(overlayBlurRadius, forKey: Keys.overlayBlurRadius) }
     }
 
+    /// Liquid Glass overlay (macOS 26+); replaces the blur, keeps the tint.
+    @Published var overlayLiquidGlass: Bool {
+        didSet { defaults.set(overlayLiquidGlass, forKey: Keys.overlayLiquidGlass) }
+    }
+
+    /// Liquid Glass is on and the OS can render it.
+    var usesLiquidGlass: Bool {
+        if #available(macOS 26, *) { return overlayLiquidGlass }
+        return false
+    }
+
     @Published var hasCompletedOnboarding: Bool {
         didSet { defaults.set(hasCompletedOnboarding, forKey: Keys.hasCompletedOnboarding) }
     }
@@ -124,5 +136,6 @@ final class AppSettings: ObservableObject {
         hasCompletedOnboarding = defaults.bool(forKey: Keys.hasCompletedOnboarding)
         overlayOpacity = defaults.object(forKey: Keys.overlayOpacity) as? Double ?? 0.5
         overlayBlurRadius = defaults.object(forKey: Keys.overlayBlurRadius) as? Double ?? 20
+        overlayLiquidGlass = defaults.object(forKey: Keys.overlayLiquidGlass) as? Bool ?? true
     }
 }

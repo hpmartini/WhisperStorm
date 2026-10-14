@@ -22,8 +22,7 @@ struct OverlayView: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(CyberpunkPalette.background.opacity(settings.overlayOpacity))
+            pillBackground
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .strokeBorder(
@@ -47,6 +46,19 @@ struct OverlayView: View {
             .padding(.vertical, 12)
         }
         .frame(width: 340, height: 104)
+    }
+
+    /// Liquid Glass refracts what is behind the panel itself; without it a
+    /// navy tint sits over the window-server blur (OverlayPanelController).
+    @ViewBuilder
+    private var pillBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+        let tint = CyberpunkPalette.background.opacity(settings.overlayOpacity)
+        if #available(macOS 26, *), settings.usesLiquidGlass {
+            Color.clear.glassEffect(.clear.tint(tint), in: shape)
+        } else {
+            shape.fill(tint)
+        }
     }
 
     private var borderGradient: Gradient {
