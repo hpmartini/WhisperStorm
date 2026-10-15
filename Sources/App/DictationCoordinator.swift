@@ -11,6 +11,12 @@ import KeyboardShortcuts
 final class DictationCoordinator: ObservableObject {
     static let shared = DictationCoordinator()
 
+    /// How a dictation result is delivered. The hotkey path uses `.hotkey` (pastes via CGEvent + Accessibility);
+    /// the Unix-socket control server uses `.socket` so the caller (pickyNotes) can read the transcript over
+    /// the wire instead of pasting it twice.
+    enum DeliveryMode { case hotkey, socket }
+    var deliveryMode: DeliveryMode = .hotkey
+
     let settings = AppSettings.shared
     let state = AppState()
     let levelStore = AudioLevelStore()
@@ -304,20 +310,25 @@ final class DictationCoordinator: ObservableObject {
 
             FileLog.write("TRANSCRIBED chars=\(text.count)")
             state.lastTranscript = text
-            let outcome = TextInserter.insert(text)
-            state.phase = .success
-            if case .clipboardOnly(let reason, let accessibilityMissing) = outcome {
-                if accessibilityMissing {
-                    NotificationManager.shared.post(
-                        title: "Copied to clipboard — insertion disabled",
-                        body: "WhisperStorm has no Accessibility permission (rebuilds reset it). System Settings > Privacy & Security > Accessibility: remove WhisperStorm with \u{2212}, then re-add and enable it. The transcript is in your clipboard."
-                    )
-                } else {
-                    NotificationManager.shared.post(
-                        title: "Copied to clipboard",
-                        body: "The transcript could not be inserted (\(reason.lowercased())). It is in your clipboard — paste it with Cmd+V."
-                    )
+            if deliveryMode == .hotkey {
+                let outcome = TextInserter.insert(text)
+                state.phase = .success
+                if case .clipboardOnly(let reason, let accessibilityMissing) = outcome {
+                    if accessibilityMissing {
+                        NotificationManager.shared.post(
+                            title: "Copied to clipboard — insertion disabled",
+                            body: "WhisperStorm has no Accessibility permission (rebuilds reset it). System Settings > Privacy & Security > Accessibility: remove WhisperStorm with \u{2212}, then re-add and enable it. The transcript is in your clipboard."
+                        )
+                    } else {
+                        NotificationManager.shared.post(
+                            title: "Copied to clipboard",
+                            body: "The transcript could not be inserted (\(reason.lowercased())). It is in your clipboard — paste it with Cmd+V."
+                        )
+                    }
                 }
+            } else {
+                // Socket delivery: the caller reads the transcript over the wire.
+                state.phase = .success
             }
             scheduleReturnToIdle(after: 0.8)
         } catch {

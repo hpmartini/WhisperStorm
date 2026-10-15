@@ -2,6 +2,7 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        ControlSocketServer.shared.start()
         NotificationManager.shared.requestAuthorizationIfNeeded()
         if !AppSettings.shared.hasCompletedOnboarding {
             DictationCoordinator.shared.showOnboarding()
@@ -14,5 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 body: "WhisperStorm has no Accessibility permission (a rebuild resets it). Re-enable it via the Setup Assistant in the menu bar — until then transcripts go to the clipboard only."
             )
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        ControlSocketServer.shared.stop()
     }
 }
