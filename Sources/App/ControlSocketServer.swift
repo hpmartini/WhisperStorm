@@ -174,6 +174,10 @@ final class ControlSocketServer {
         let phase = DispatchQueue.main.sync { DictationCoordinator.shared.state.phase }
         if phase == .recording, !abandoned.isSet { return ["ok": true, "phase": "recording"] }
         if case .error(let msg) = phase { return endDelivery(["ok": false, "phase": "error", "error": msg]) }
+        // Overlapping start: the first start owns the delivery mode, so this one must not reset it.
+        if DispatchQueue.main.sync(execute: { DictationCoordinator.shared.isStarting }) {
+            return ["ok": false, "phase": "idle", "error": "start already in progress"]
+        }
         return endDelivery(["ok": false, "phase": DispatchQueue.main.sync { ControlSocketServer.phaseString(phase) }, "error": "dictation did not start"])
     }
 
@@ -182,7 +186,8 @@ final class ControlSocketServer {
     private nonisolated func stopReply() -> [String: Any] {
         let stopped: Bool = DispatchQueue.main.sync {
             let coord = DictationCoordinator.shared
-            guard coord.state.phase == .recording else { return false }
+            // A stop that arrives while the capture is still starting is deferred by the coordinator; refusing it would leave the mic hot.
+            guard coord.state.phase == .recording || coord.isStarting else { return false }
             coord.stopDictation()
             return true
         }
@@ -192,6 +197,8 @@ final class ControlSocketServer {
         while Date() < deadline {
             let settled: [String: Any]? = DispatchQueue.main.sync {
                 let state = DictationCoordinator.shared.state
+                // Still starting (stop was deferred): idle here is not "no speech".
+                if DictationCoordinator.shared.isStarting { return nil }
                 switch state.phase {
                 case .success: return ["ok": true, "phase": "success", "text": state.lastTranscript]
                 case .error(let msg): return ["ok": false, "phase": "error", "error": msg]

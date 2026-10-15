@@ -49,7 +49,7 @@ final class DictationCoordinator: ObservableObject {
     private var lastStartDuration: TimeInterval = 0
     /// `captureEngine.start` suspends (phase is still idle meanwhile), so a second
     /// start must be ignored and a stop is remembered until recording begins.
-    private var isStarting = false
+    private(set) var isStarting = false
     private var stopAfterStart = false
     private var settingsCancellables = Set<AnyCancellable>()
 
