@@ -118,7 +118,7 @@ final class ControlSocketServer {
         case "status":
             return DispatchQueue.main.sync { ControlSocketServer.statusReply(coord: DictationCoordinator.shared) }
         case "start":
-            return DispatchQueue.main.sync { ControlSocketServer.startReply(coord: DictationCoordinator.shared) }
+            return startReply()
         case "stop":
             return stopReply()
         default:
@@ -131,11 +131,27 @@ final class ControlSocketServer {
     }
 
     /// Socket delivery stays on from here until stopReply sees success or error, so the transcript is returned instead of pasted.
+    /// Replies ok only once the phase is .recording. The microphone prompt and the capture start are awaited on the socket
+    /// worker thread (not on main), so a denied microphone or a failed device comes back as ok:false with the error text.
     /// shortcut: a client that starts and never stops leaves socket delivery on (hotkey dictation then does not paste) until its next stop; upgrade with a watchdog if clients get flaky.
-    private static func startReply(coord: DictationCoordinator) -> [String: Any] {
-        if coord.state.phase != .recording && coord.state.phase != .transcribing { coord.deliveryMode = .socket }
-        Task { @MainActor in await coord.startDictation() }
-        return ["ok": true, "phase": phaseString(coord.state.phase)]
+    private nonisolated func startReply() -> [String: Any] {
+        let before: AppState.Phase = DispatchQueue.main.sync {
+            let coord = DictationCoordinator.shared
+            if coord.state.phase != .recording && coord.state.phase != .transcribing { coord.deliveryMode = .socket }
+            Task { @MainActor in await coord.startDictation() }
+            return coord.state.phase
+        }
+        let deadline = Date().addingTimeInterval(3)
+        var phase = before
+        while Date() < deadline {
+            phase = DispatchQueue.main.sync { DictationCoordinator.shared.state.phase }
+            if phase == .recording { return ["ok": true, "phase": "recording"] }
+            // An .error already showing before this start is stale (it resets to idle after 3.5 s), so it does not count.
+            if case .error = phase, phase != before { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if case .error(let msg) = phase { return endDelivery(["ok": false, "phase": "error", "error": msg]) }
+        return endDelivery(["ok": false, "phase": DispatchQueue.main.sync { ControlSocketServer.phaseString(phase) }, "error": "dictation did not start"])
     }
 
     /// Stops the recording and waits for the transcript. Hops to the main actor only to call stopDictation and to read the
