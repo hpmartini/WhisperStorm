@@ -202,7 +202,7 @@ final class DictationCoordinator: ObservableObject {
                 ?? "the system default input"
             let startedAt = Date()
             defer { lastStartDuration = Date().timeIntervalSince(startedAt) }
-            try captureEngine.start(deviceID: device?.id)
+            try await captureEngine.start(deviceID: device?.id)
             idleResetTask?.cancel()
             state.phase = .recording
             installEscMonitors()

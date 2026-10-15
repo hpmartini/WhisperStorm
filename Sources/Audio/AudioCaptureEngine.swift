@@ -2,8 +2,14 @@ import AVFoundation
 import Accelerate
 import Foundation
 
-/// Captures microphone audio with AVAudioEngine, downsamples to 16 kHz mono
+/// Captures microphone audio with AVCaptureSession, downsamples to 16 kHz mono
 /// Float32 PCM and feeds smoothed RMS levels to the waveform overlay.
+///
+/// AVCaptureSession instead of AVAudioEngine: the engine also pulls the default
+/// *output* device into a CoreAudio aggregate, and when that output stalls the
+/// input fails with `kAUStartIO` / "avfaudio error 35" even though the microphone
+/// is fine (reproduced with a stand-alone probe: engine failed, capture session
+/// delivered samples on the same Elgato Wave:3). A capture session is input-only.
 final class AudioCaptureEngine {
     static let targetSampleRate: Double = 16_000
 
@@ -30,6 +36,19 @@ final class AudioCaptureEngine {
         }
     }
 
+    /// Forwards capture callbacks without making the engine an NSObject.
+    private final class SampleDelegate: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+        weak var owner: AudioCaptureEngine?
+
+        func captureOutput(
+            _ output: AVCaptureOutput,
+            didOutput sampleBuffer: CMSampleBuffer,
+            from connection: AVCaptureConnection
+        ) {
+            owner?.handle(sampleBuffer: sampleBuffer)
+        }
+    }
+
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
         sampleRate: AudioCaptureEngine.targetSampleRate,
@@ -38,11 +57,20 @@ final class AudioCaptureEngine {
     )!
 
     private let levelStore: AudioLevelStore
-    private var engine: AVAudioEngine?
+    private var session: AVCaptureSession?
+    private let sampleDelegate = SampleDelegate()
+    /// startRunning/stopRunning block (seconds on a stalled device), so they never run on the main actor.
+    private let sessionQueue = DispatchQueue(label: "whisperstorm.capture.session")
+    private let sampleQueue = DispatchQueue(label: "whisperstorm.capture.samples")
+
+    /// Only touched on `sampleQueue`.
     private var converter: AVAudioConverter?
+    private var converterInputFormat: AVAudioFormat?
 
     private let bufferLock = NSLock()
     private var samples: [Float] = []
+    /// Guarded by `bufferLock`; false drops late callbacks after stop().
+    private var capturing = false
 
     private var smoothedLevel: Float = 0
     private var levelLogCounter = 0
@@ -50,20 +78,19 @@ final class AudioCaptureEngine {
     private(set) var isRunning = false
     private(set) var activeDeviceID: AudioDeviceID?
 
-    /// Called on the main actor when the engine's configuration changed
+    /// Called on the main actor when the capture configuration changed
     /// mid-capture (e.g. the input device disappeared).
     var onConfigurationChange: (() -> Void)?
 
-    private var configurationObserver: NSObjectProtocol?
+    private var observers: [NSObjectProtocol] = []
 
     init(levelStore: AudioLevelStore) {
         self.levelStore = levelStore
+        sampleDelegate.owner = self
     }
 
     deinit {
-        if let configurationObserver {
-            NotificationCenter.default.removeObserver(configurationObserver)
-        }
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     static func requestMicrophoneAccess() async -> Bool {
@@ -79,19 +106,35 @@ final class AudioCaptureEngine {
 
     // MARK: - Capture lifecycle
 
-    /// Starts capturing. Pass nil to record from the system default input.
-    func start(deviceID: AudioDeviceID?) throws {
+    /// Starts capturing without blocking the caller's thread. Pass nil to record from the system default input.
+    func start(deviceID: AudioDeviceID?) async throws {
         guard !isRunning else { return }
-        bufferLock.withLock { samples.removeAll(keepingCapacity: true) }
-        smoothedLevel = 0
-        levelStore.level = 0
-        try setUpEngine(deviceID: deviceID)
+        resetBuffers()
+        let session = try makeSession(deviceID: deviceID)
+        // Accept buffers from the first callback on: the await below resumes on the main actor, which may be busy, and anything dropped until then is lost audio.
+        bufferLock.withLock { capturing = true }
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                sessionQueue.async {
+                    session.startRunning()
+                    if session.isRunning {
+                        continuation.resume()
+                    } else {
+                        continuation.resume(throwing: CaptureError.engineStartFailed("the capture session did not start"))
+                    }
+                }
+            }
+        } catch {
+            bufferLock.withLock { capturing = false }
+            throw error
+        }
+        attach(session)
         isRunning = true
     }
 
     /// Stops capturing and returns all 16 kHz mono samples recorded so far.
     func stop() -> [Float] {
-        tearDownEngine()
+        tearDownSession()
         isRunning = false
         levelStore.level = 0
         return bufferLock.withLock { samples }
@@ -104,10 +147,18 @@ final class AudioCaptureEngine {
     }
 
     /// Re-attaches capture to another device, keeping already-recorded samples.
+    /// Blocks while the new device starts; only used on rare device changes.
     func switchDevice(to deviceID: AudioDeviceID?) throws {
         guard isRunning else { return }
-        tearDownEngine()
-        try setUpEngine(deviceID: deviceID)
+        tearDownSession()
+        let session = try makeSession(deviceID: deviceID)
+        bufferLock.withLock { capturing = true }
+        session.startRunning()
+        guard session.isRunning else {
+            bufferLock.withLock { capturing = false }
+            throw CaptureError.engineStartFailed("the capture session did not start")
+        }
+        attach(session)
     }
 
     var recordedDuration: TimeInterval {
@@ -115,86 +166,125 @@ final class AudioCaptureEngine {
         return Double(count) / Self.targetSampleRate
     }
 
-    // MARK: - Engine setup
+    // MARK: - Session setup
 
-    private func setUpEngine(deviceID: AudioDeviceID?) throws {
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
+    private func resetBuffers() {
+        bufferLock.withLock { samples.removeAll(keepingCapacity: true) }
+        sampleQueue.sync {
+            converter = nil
+            converterInputFormat = nil
+        }
+        smoothedLevel = 0
+        levelStore.level = 0
+    }
 
+    /// Builds (but does not start) a session for the chosen device.
+    private func makeSession(deviceID: AudioDeviceID?) throws -> AVCaptureSession {
+        let device: AVCaptureDevice
         if let deviceID {
-            try setInputDevice(deviceID, on: inputNode)
+            guard let uid = AudioDeviceManager.allInputDevices().first(where: { $0.id == deviceID })?.uid,
+                  let chosen = AVCaptureDevice(uniqueID: uid)
+            else { throw CaptureError.deviceSelectionFailed }
+            device = chosen
+        } else {
+            guard let fallback = AVCaptureDevice.default(for: .audio) else {
+                throw CaptureError.deviceSelectionFailed
+            }
+            device = fallback
         }
         activeDeviceID = deviceID ?? AudioDeviceManager.defaultInputDeviceID()
 
-        let inputFormat = inputNode.inputFormat(forBus: 0)
-        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
-            throw CaptureError.invalidInputFormat
+        let input: AVCaptureDeviceInput
+        do {
+            input = try AVCaptureDeviceInput(device: device)
+        } catch {
+            throw CaptureError.engineStartFailed(error.localizedDescription)
         }
-        guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
-            throw CaptureError.converterUnavailable
-        }
-        self.converter = converter
+        let output = AVCaptureAudioDataOutput()
+        // Float32 non-interleaved, so process(buffer:) can read floatChannelData directly.
+        output.audioSettings = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: true,
+        ]
+        output.setSampleBufferDelegate(sampleDelegate, queue: sampleQueue)
 
-        inputNode.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
-            self?.process(buffer: buffer)
+        let session = AVCaptureSession()
+        session.beginConfiguration()
+        guard session.canAddInput(input), session.canAddOutput(output) else {
+            session.commitConfiguration()
+            throw CaptureError.deviceSelectionFailed
         }
+        session.addInput(input)
+        session.addOutput(output)
+        session.commitConfiguration()
+        return session
+    }
 
-        configurationObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: engine,
-            queue: nil
-        ) { [weak self] _ in
-            Log.audio.notice("Audio engine configuration changed")
+    private func attach(_ session: AVCaptureSession) {
+        self.session = session
+        let notify: (Notification) -> Void = { [weak self] _ in
+            Log.audio.notice("Audio capture configuration changed")
             Task { @MainActor in
                 self?.onConfigurationChange?()
             }
         }
-
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            inputNode.removeTap(onBus: 0)
-            throw CaptureError.engineStartFailed(error.localizedDescription)
-        }
-        self.engine = engine
-        Log.audio.info("Capture started (device \(self.activeDeviceID ?? 0), input \(inputFormat.sampleRate) Hz / \(inputFormat.channelCount) ch)")
+        observers = [
+            NotificationCenter.default.addObserver(
+                forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil, using: notify
+            ),
+            NotificationCenter.default.addObserver(
+                forName: AVCaptureDevice.wasDisconnectedNotification, object: nil, queue: nil, using: notify
+            ),
+        ]
+        Log.audio.info("Capture started (device \(self.activeDeviceID ?? 0))")
     }
 
-    private func tearDownEngine() {
-        if let configurationObserver {
-            NotificationCenter.default.removeObserver(configurationObserver)
-            self.configurationObserver = nil
-        }
-        guard let engine else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        self.engine = nil
-        converter = nil
+    private func tearDownSession() {
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+        observers = []
+        bufferLock.withLock { capturing = false }
+        guard let session else { return }
+        self.session = nil
+        sessionQueue.async { session.stopRunning() }
     }
 
-    private func setInputDevice(_ deviceID: AudioDeviceID, on node: AVAudioInputNode) throws {
-        guard let audioUnit = node.audioUnit else {
-            throw CaptureError.deviceSelectionFailed
-        }
-        var device = deviceID
-        let status = AudioUnitSetProperty(
-            audioUnit,
-            kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global,
-            0,
-            &device,
-            UInt32(MemoryLayout<AudioDeviceID>.size)
+    // MARK: - Buffer processing (runs on `sampleQueue`)
+
+    private func handle(sampleBuffer: CMSampleBuffer) {
+        guard bufferLock.withLock({ capturing }) else { return }
+        guard let description = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)
+        else { return }
+        var streamDescription = asbd.pointee
+        let frames = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
+        guard frames > 0,
+              let format = AVAudioFormat(streamDescription: &streamDescription),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)
+        else { return }
+        buffer.frameLength = frames
+        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
+            sampleBuffer, at: 0, frameCount: Int32(frames), into: buffer.mutableAudioBufferList
         )
         guard status == noErr else {
-            throw CaptureError.deviceSelectionFailed
+            Log.audio.error("Copying capture samples failed: \(status)")
+            return
         }
+        process(buffer: buffer)
     }
 
-    // MARK: - Buffer processing (runs on the audio tap thread)
-
     private func process(buffer: AVAudioPCMBuffer) {
-        guard let converter, let channelData = buffer.floatChannelData?[0] else { return }
+        guard buffer.format.sampleRate > 0, buffer.format.channelCount > 0,
+              let channelData = buffer.floatChannelData?[0]
+        else { return }
+
+        if converter == nil || converterInputFormat != buffer.format {
+            converter = AVAudioConverter(from: buffer.format, to: targetFormat)
+            converterInputFormat = buffer.format
+        }
+        guard let converter else { return }
 
         var rms: Float = 0
         vDSP_rmsqv(channelData, 1, &rms, vDSP_Length(buffer.frameLength))
@@ -225,6 +315,7 @@ final class AudioCaptureEngine {
         let frameCount = Int(outBuffer.frameLength)
         guard frameCount > 0, let outChannel = outBuffer.floatChannelData?[0] else { return }
         bufferLock.withLock {
+            guard capturing else { return }
             samples.append(contentsOf: UnsafeBufferPointer(start: outChannel, count: frameCount))
         }
     }
