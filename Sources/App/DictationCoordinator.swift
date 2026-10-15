@@ -47,6 +47,10 @@ final class DictationCoordinator: ObservableObject {
     /// A stalled device (seen with an Elgato Wave:3) can hold the main actor
     /// for seconds, so the push-to-talk key-up only arrives afterwards.
     private var lastStartDuration: TimeInterval = 0
+    /// `captureEngine.start` suspends (phase is still idle meanwhile), so a second
+    /// start must be ignored and a stop is remembered until recording begins.
+    private var isStarting = false
+    private var stopAfterStart = false
     private var settingsCancellables = Set<AnyCancellable>()
 
     private init() {
@@ -100,7 +104,7 @@ final class DictationCoordinator: ObservableObject {
         }
         KeyboardShortcuts.onKeyDown(for: .pushToTalk) { [weak self] in
             guard let self, Self.accepts(.pushToTalk, event: "PTT down") else { return }
-            if pttLatched, state.phase == .recording {
+            if pttLatched, state.phase == .recording || isStarting {
                 pttLatched = false
                 pttIgnoreNextKeyUp = true
                 stopDictation()
@@ -175,7 +179,11 @@ final class DictationCoordinator: ObservableObject {
         case .recording:
             stopDictation()
         case .idle, .success, .error:
-            Task { await startDictation() }
+            if isStarting {
+                stopDictation()
+            } else {
+                Task { await startDictation() }
+            }
         case .transcribing:
             break
         }
@@ -190,6 +198,13 @@ final class DictationCoordinator: ObservableObject {
         case .idle, .success, .error:
             break
         }
+        guard !isStarting else {
+            FileLog.write("  -> ignored: start already in progress")
+            return
+        }
+        isStarting = true
+        stopAfterStart = false
+        defer { isStarting = false }
         guard await AudioCaptureEngine.requestMicrophoneAccess() else {
             FileLog.write("  -> microphone access denied")
             reportError("Microphone access denied. Grant it in System Settings > Privacy & Security > Microphone.")
@@ -211,6 +226,10 @@ final class DictationCoordinator: ObservableObject {
                 "  -> recording from \(activeDeviceLabel) "
                 + "(start took \(String(format: "%.2f", Date().timeIntervalSince(startedAt)))s)"
             )
+            if stopAfterStart {
+                stopAfterStart = false
+                stopDictation()
+            }
         } catch {
             FileLog.write(
                 "  -> capture start FAILED after \(String(format: "%.2f", lastStartDuration))s: "
@@ -230,6 +249,11 @@ final class DictationCoordinator: ObservableObject {
     }
 
     func stopDictation() {
+        if isStarting, state.phase != .recording {
+            FileLog.write("STOP deferred until recording has started")
+            stopAfterStart = true
+            return
+        }
         guard state.phase == .recording else {
             FileLog.write("STOP ignored, phase=\(state.phase)")
             return
