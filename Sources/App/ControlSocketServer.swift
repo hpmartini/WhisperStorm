@@ -11,6 +11,8 @@ import Foundation
 ///
 /// Permissions: the app is intentionally not sandboxed (CGEvent posting requires it). The directory is 0700 and the socket 0600
 /// (umask 077 around bind(), so there is no window with wider permissions); the Tauri app runs as the same user.
+/// Decision (2026-10-16): socket access stays as is — no peer/signature check. Any process of the same user can start a recording
+/// and read the transcript (using WhisperStorm's microphone grant); accepted, since same-user code can already do far worse.
 /// Limits: every reply ends with "\n"; a request line above 64 KB is rejected ("request too large"); an idle client is dropped after 5 s.
 @MainActor
 final class ControlSocketServer {
