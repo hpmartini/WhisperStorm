@@ -105,7 +105,8 @@ final class ControlSocketServer {
         }
     }
 
-    /// Decodes the request line and dispatches to the coordinator on the main actor.
+    /// Decodes the request line and runs it. Runs on a background queue: stop waits for the transcript there,
+    /// because the transcription itself is scheduled on the main actor and must not be blocked.
     private nonisolated func parseAndRun(line: String) -> [String: Any] {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let data = trimmed.data(using: .utf8),
@@ -113,54 +114,62 @@ final class ControlSocketServer {
               let cmd = obj["cmd"] as? String else {
             return ["ok": false, "phase": "error", "error": "invalid request"]
         }
-        let sema = DispatchSemaphore(value: 0)
-        var reply: [String: Any] = ["ok": false]
-        DispatchQueue.main.async {
-            let coord = DictationCoordinator.shared
-            coord.deliveryMode = .socket
-            switch cmd {
-            case "status":
-                reply = ControlSocketServer.statusReply(coord: coord)
-            case "start":
-                reply = ControlSocketServer.startReply(coord: coord)
-            case "stop":
-                reply = ControlSocketServer.stopReply(coord: coord)
-            default:
-                reply = ["ok": false, "phase": "error", "error": "unknown cmd"]
-            }
-            sema.signal()
+        switch cmd {
+        case "status":
+            return DispatchQueue.main.sync { ControlSocketServer.statusReply(coord: DictationCoordinator.shared) }
+        case "start":
+            return DispatchQueue.main.sync { ControlSocketServer.startReply(coord: DictationCoordinator.shared) }
+        case "stop":
+            return stopReply()
+        default:
+            return ["ok": false, "phase": "error", "error": "unknown cmd"]
         }
-        sema.wait()
-        DispatchQueue.main.async { DictationCoordinator.shared.deliveryMode = .hotkey }
-        return reply
     }
 
     private static func statusReply(coord: DictationCoordinator) -> [String: Any] {
         ["ok": true, "phase": phaseString(coord.state.phase), "text": NSNull()]
     }
 
+    /// Socket delivery stays on from here until stopReply sees success or error, so the transcript is returned instead of pasted.
+    /// shortcut: a client that starts and never stops leaves socket delivery on (hotkey dictation then does not paste) until its next stop; upgrade with a watchdog if clients get flaky.
     private static func startReply(coord: DictationCoordinator) -> [String: Any] {
+        if coord.state.phase != .recording && coord.state.phase != .transcribing { coord.deliveryMode = .socket }
         Task { @MainActor in await coord.startDictation() }
         return ["ok": true, "phase": phaseString(coord.state.phase)]
     }
 
-    private static func stopReply(coord: DictationCoordinator) -> [String: Any] {
-        // Synchronous-ish: stop fires off runTranscription, we wait for the phase to settle into success/error.
-        coord.stopDictation()
-        let deadline = Date().addingTimeInterval(120)
-        while Date() < deadline {
-            switch coord.state.phase {
-            case .success:
-                return ["ok": true, "phase": "success", "text": coord.state.lastTranscript]
-            case .error(let msg):
-                return ["ok": false, "phase": "error", "error": msg]
-            case .idle:
-                return ["ok": false, "phase": "idle", "error": "nothing to stop"]
-            default:
-                Thread.sleep(forTimeInterval: 0.5)
-            }
+    /// Stops the recording and waits for the transcript. Hops to the main actor only to call stopDictation and to read the
+    /// state; the waiting happens on the socket worker thread so the main-actor transcription task can run.
+    private nonisolated func stopReply() -> [String: Any] {
+        let stopped: Bool = DispatchQueue.main.sync {
+            let coord = DictationCoordinator.shared
+            guard coord.state.phase == .recording else { return false }
+            coord.stopDictation()
+            return true
         }
-        return ["ok": false, "phase": "error", "error": "transcription timeout"]
+        guard stopped else { return endDelivery(["ok": false, "phase": "idle", "error": "nothing to stop"]) }
+        // Shorter than the 120 s read timeout of the pickyNotes client, so it gets this error instead of timing out itself.
+        let deadline = Date().addingTimeInterval(110)
+        while Date() < deadline {
+            let settled: [String: Any]? = DispatchQueue.main.sync {
+                let state = DictationCoordinator.shared.state
+                switch state.phase {
+                case .success: return ["ok": true, "phase": "success", "text": state.lastTranscript]
+                case .error(let msg): return ["ok": false, "phase": "error", "error": msg]
+                case .idle: return ["ok": false, "phase": "idle", "error": "no speech recorded"]
+                default: return nil
+                }
+            }
+            if let settled { return endDelivery(settled) }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return endDelivery(["ok": false, "phase": "error", "error": "transcription timeout"])
+    }
+
+    /// Back to hotkey delivery once the transcription reached success or error (or the wait gave up).
+    private nonisolated func endDelivery(_ reply: [String: Any]) -> [String: Any] {
+        DispatchQueue.main.sync { DictationCoordinator.shared.deliveryMode = .hotkey }
+        return reply
     }
 
     private static func phaseString(_ phase: AppState.Phase) -> String {
