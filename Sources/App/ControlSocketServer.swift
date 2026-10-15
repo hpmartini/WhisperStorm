@@ -9,7 +9,9 @@ import Foundation
 /// Start/stop are routed through DictationCoordinator (so all the existing logic — model warmup, ESC handling, errors — runs unchanged);
 /// when deliveryMode == .socket the coordinator skips TextInserter.insert and returns the transcript on the wire so it isn't pasted twice.
 ///
-/// Permissions: the app is intentionally not sandboxed (CGEvent posting requires it). We chmod 0600 on the socket; the Tauri app runs as the same user.
+/// Permissions: the app is intentionally not sandboxed (CGEvent posting requires it). The directory is 0700 and the socket 0600
+/// (umask 077 around bind(), so there is no window with wider permissions); the Tauri app runs as the same user.
+/// Limits: every reply ends with "\n"; a request line above 64 KB is rejected ("request too large"); an idle client is dropped after 5 s.
 @MainActor
 final class ControlSocketServer {
     static let shared = ControlSocketServer()
@@ -28,7 +30,10 @@ final class ControlSocketServer {
     func start() {
         stop()
         let url = Self.socketURL
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let dir = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // createDirectory leaves an existing directory's mode alone, so set 0700 explicitly.
+        _ = dir.withUnsafeFileSystemRepresentation { path in path.map { chmod($0, S_IRWXU) } }
         // Stale socket from a previous launch — unlink so bind() succeeds.
         try? FileManager.default.removeItem(at: url)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -40,11 +45,14 @@ final class ControlSocketServer {
         _ = pathBytes.withUnsafeBufferPointer { ptr in
             memcpy(&addr.sun_path, ptr.baseAddress!, ptr.count)
         }
+        // umask is process-wide; the window is the bind() call at launch only.
+        let oldMask = umask(0o077)
         let bindResult = withUnsafePointer(to: &addr) { ptr -> Int32 in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
                 bind(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
+        umask(oldMask)
         if bindResult != 0 {
             FileLog.write("SOCKET: bind() failed: \(String(cString: strerror(errno)))")
             close(fd)
@@ -86,20 +94,31 @@ final class ControlSocketServer {
         }
     }
 
-    /// Reads up to one JSON line, parses the command, asks the coordinator, writes a JSON reply, closes.
+    private static let maxRequestBytes = 65536
+
+    /// Reads up to one JSON line (at most 64 KB, 5 s per read), parses the command, asks the coordinator,
+    /// writes a newline-terminated JSON reply, closes.
     private nonisolated func handleConnection(fd: Int32) {
         defer { close(fd) }
-        var buf = ""
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var buf = Data()
         var tmp = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let n = read(fd, &tmp, tmp.count)
+        while !buf.contains(UInt8(ascii: "\n")) {
+            let n = read(fd, &tmp, tmp.count)  // 0 = EOF, -1 = error or SO_RCVTIMEO
             if n <= 0 { break }
-            buf += String(decoding: tmp.prefix(n), as: UTF8.self)
-            if buf.contains("\n") { break }
+            buf.append(contentsOf: tmp.prefix(n))
+            if buf.count > Self.maxRequestBytes { break }
         }
-        let line = buf.split(separator: "\n").first.map(String.init) ?? ""
-        let reply = parseAndRun(line: line)
-        let data = (try? JSONSerialization.data(withJSONObject: reply, options: [.fragmentsAllowed])) ?? Data()
+        let reply: [String: Any]
+        if buf.count > Self.maxRequestBytes {
+            reply = ["ok": false, "phase": "error", "error": "request too large"]
+        } else {
+            let line = String(decoding: buf, as: UTF8.self).split(separator: "\n").first.map(String.init) ?? ""
+            reply = parseAndRun(line: line)
+        }
+        var data = (try? JSONSerialization.data(withJSONObject: reply, options: [.fragmentsAllowed])) ?? Data()
+        data.append(UInt8(ascii: "\n"))
         _ = data.withUnsafeBytes { ptr in
             write(fd, ptr.baseAddress, data.count)
         }
@@ -131,25 +150,29 @@ final class ControlSocketServer {
     }
 
     /// Socket delivery stays on from here until stopReply sees success or error, so the transcript is returned instead of pasted.
-    /// Replies ok only once the phase is .recording. The microphone prompt and the capture start are awaited on the socket
-    /// worker thread (not on main), so a denied microphone or a failed device comes back as ok:false with the error text.
+    /// Awaits `startDictation()` itself (microphone prompt included, bounded at 30 s) on the socket worker thread, then reads the phase:
+    /// ok only on .recording, otherwise the error text. If the wait gives up, the start is abandoned: a recording that begins
+    /// afterwards is cancelled, so no late recording is left behind.
     /// shortcut: a client that starts and never stops leaves socket delivery on (hotkey dictation then does not paste) until its next stop; upgrade with a watchdog if clients get flaky.
     private nonisolated func startReply() -> [String: Any] {
-        let before: AppState.Phase = DispatchQueue.main.sync {
+        let done = DispatchSemaphore(value: 0)
+        let abandoned = AbandonFlag()
+        DispatchQueue.main.sync {
             let coord = DictationCoordinator.shared
             if coord.state.phase != .recording && coord.state.phase != .transcribing { coord.deliveryMode = .socket }
-            Task { @MainActor in await coord.startDictation() }
-            return coord.state.phase
+            Task { @MainActor in
+                await coord.startDictation()
+                if abandoned.isSet, coord.state.phase == .recording { coord.cancelDictation() }
+                done.signal()
+            }
         }
-        let deadline = Date().addingTimeInterval(3)
-        var phase = before
-        while Date() < deadline {
-            phase = DispatchQueue.main.sync { DictationCoordinator.shared.state.phase }
-            if phase == .recording { return ["ok": true, "phase": "recording"] }
-            // An .error already showing before this start is stale (it resets to idle after 3.5 s), so it does not count.
-            if case .error = phase, phase != before { break }
-            Thread.sleep(forTimeInterval: 0.05)
+        if done.wait(timeout: .now() + 30) == .timedOut {
+            abandoned.set()
+            // Covers a start that finished between the timeout and set(); a later one is cancelled by the Task above.
+            DispatchQueue.main.sync { DictationCoordinator.shared.cancelDictation() }
         }
+        let phase = DispatchQueue.main.sync { DictationCoordinator.shared.state.phase }
+        if phase == .recording, !abandoned.isSet { return ["ok": true, "phase": "recording"] }
         if case .error(let msg) = phase { return endDelivery(["ok": false, "phase": "error", "error": msg]) }
         return endDelivery(["ok": false, "phase": DispatchQueue.main.sync { ControlSocketServer.phaseString(phase) }, "error": "dictation did not start"])
     }
@@ -197,4 +220,12 @@ final class ControlSocketServer {
         case .error: "error"
         }
     }
+}
+
+/// Set from the socket worker when it stops waiting for a start; read on the main actor.
+private final class AbandonFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
+    func set() { lock.lock(); value = true; lock.unlock() }
 }
