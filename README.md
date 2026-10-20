@@ -1,48 +1,62 @@
 # WhisperStorm
 
-System-wide dictation for macOS — a native menu bar app that records your voice with a global hotkey, transcribes it **entirely on-device** and pastes the text into whatever app you're working in. No cloud calls, ever.
+**System-wide dictation for macOS. Press a hotkey, speak, and the text lands in whatever app you're working in — transcribed entirely on your Mac.**
 
-- **Speech-to-text**: [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift) (CoreML, Apple Silicon) or any OpenAI-compatible local HTTP server
-- **Languages**: German and English (auto-detect or fixed)
-- **UI**: menu bar app (no Dock icon) with a cyberpunk waveform overlay while you speak
+WhisperStorm is a native menu-bar app. No cloud, no account, no telemetry: audio never leaves your machine.
+
+<p align="center">
+  <img src="docs/screenshots/overlay.png" alt="Listening overlay with neon waveform" width="460">
+</p>
+
+## Features
+
+- **Global hotkey** — toggle (press, speak, press) or push-to-talk (hold, speak, release). Default ⌥ Space.
+- **100 % on-device** — [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift) on CoreML / Apple Silicon, or any OpenAI-compatible local server.
+- **German and English** — auto-detect or fixed.
+- **Pastes where you type** — result goes to the clipboard and into the focused text field.
+- **Live waveform overlay** — non-activating, never steals focus from your app.
+- **Microphone picker**, launch at login, Esc to cancel.
 
 ## Requirements
 
-- macOS 14+ on Apple Silicon
-- Xcode 16+ (command line build only, no clicking required)
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`
+- macOS 14+, Apple Silicon
+- Xcode 16+ and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
 
-## Build & run (one command)
+WhisperStorm is not notarized, so you build it yourself.
 
-First, once per machine, create the stable signing identity so permissions survive rebuilds (see "Why signing matters" below):
+## Install
 
 ```bash
+git clone https://github.com/hpmartini/WhisperStorm.git
+cd WhisperStorm
+
+# Once per machine: stable signing identity so macOS keeps your permissions across rebuilds
 ./scripts/setup-signing.sh
-```
 
-Then build & run — repeatable any time:
-
-```bash
 xcodegen generate && xcodebuild -project WhisperStorm.xcodeproj -scheme WhisperStorm -configuration Release -derivedDataPath build build && open build/Build/Products/Release/WhisperStorm.app
 ```
 
-The app appears as a waveform icon in the menu bar.
+A waveform icon appears in the menu bar. Copy the app to `/Applications` if you want Launch at Login.
 
-> If you skip `setup-signing.sh`, the build falls back to ad-hoc signing and macOS resets the Accessibility/Microphone permissions on **every** rebuild — text insertion then works only until the next build.
+> Skipping `setup-signing.sh` falls back to ad-hoc signing; macOS then resets the Accessibility permission on every rebuild and text only reaches the clipboard. See [Why signing matters](#why-signing-matters).
 
-## First-run setup (permissions)
+## First run
 
-On first launch the **Setup Assistant** window opens and shows both permissions as traffic lights with buttons that deep-link into System Settings:
+The Setup Assistant opens on first launch (reopen it via menu-bar icon → *Setup Assistant…*).
 
-1. **Microphone** — required for recording. Click *Request Access* and confirm the system dialog (System Settings > Privacy & Security > Microphone, enable *WhisperStorm*).
-2. **Accessibility** — required to insert the transcript into the focused text field (WhisperStorm synthesizes Cmd+V). In System Settings > Privacy & Security > Accessibility, add/enable *WhisperStorm*. **Without this permission transcripts are only copied to the clipboard.**
-3. **Notifications** (optional) — used for error reporting and the "Copied to clipboard" fallback.
+<p align="center">
+  <img src="docs/screenshots/setup.png" alt="Setup Assistant with Microphone and Accessibility status" width="420">
+</p>
 
-You can reopen the assistant anytime via menu bar icon > *Setup Assistant…*.
+1. **Microphone** — required to record.
+2. **Accessibility** — required to paste into the focused field. Without it, transcripts are only copied to the clipboard.
+3. **Notifications** (optional) — error messages and the "Copied to clipboard" fallback.
 
-## Download a model
+Then pick a model: menu-bar icon → *Settings…* → **Model**.
 
-Menu bar icon > *Settings…* > **Model** tab. Pick a model and click *Download*:
+<p align="center">
+  <img src="docs/screenshots/settings-model.png" alt="Model settings with WhisperKit model list" width="420">
+</p>
 
 | Model | Size | Notes |
 |:------|:-----|:------|
@@ -51,67 +65,60 @@ Menu bar icon > *Settings…* > **Model** tab. Pick a model and click *Download*
 | Small | ~600 MB | Default — good balance |
 | Large v3 Turbo | ~1.6 GB | **Recommended** — best accuracy, still fast |
 
-Models are stored in `~/Library/Application Support/WhisperStorm/models`. After download or activation, the model is warmed up in the background: CoreML compiles it for your chip (Settings > Model shows "Optimizing…"). **This one-time step can take several minutes for Large v3 Turbo** — if you dictate before it finishes, the overlay shows "Preparing model…" until it's ready. The tokenizer is also fetched once, which needs a network connection.
+Models live in `~/Library/Application Support/WhisperStorm/models`. After a download CoreML compiles the model for your chip once (up to several minutes for Large v3 Turbo); until then the overlay shows "Preparing model…". The tokenizer is fetched once, which needs a network connection.
 
 ## Usage
 
-Two shortcuts, both configurable in Settings > General:
-- **Toggle** (default **⌥ Space**): press once to record, press again to stop and transcribe.
-- **Push to Talk** (unbound by default): hold while speaking, release to transcribe. With *Tap push-to-talk shortcut to toggle* on, a short tap (< 0.3 s) starts recording and the next tap stops it.
+- **Toggle** (default **⌥ Space**): press to record, press again to stop and transcribe.
+- **Push to talk** (unbound by default): hold while speaking, release to transcribe. With *Tap push-to-talk shortcut to toggle*, a short tap (< 0.3 s) starts recording and the next tap stops it.
 - **Esc** while recording cancels — nothing is inserted, the clipboard is untouched.
-- The waveform overlay at the bottom of the screen never steals focus from your app.
-- After transcription the text is **copied to the clipboard** (and stays there) and **pasted** into the focused text field. If nothing has keyboard focus, you get a "Copied to clipboard" notification instead.
+- The text stays on the clipboard after pasting. If nothing has keyboard focus you get a "Copied to clipboard" notification.
 
-## Using a local Docker server instead of WhisperKit
+Both shortcuts, language, overlay look and launch at login are in Settings → **General**.
 
-Settings > Model > Provider: *OpenAI-compatible server*. WhisperStorm POSTs WAV audio to `<base URL>/v1/audio/transcriptions` (multipart/form-data), so any OpenAI-compatible STT server works — for example a [speaches](https://github.com/speaches-ai/speaches) (faster-whisper) container:
+<p align="center">
+  <img src="docs/screenshots/settings-general.png" alt="General settings" width="420">
+</p>
+
+### Using a local server instead of WhisperKit
+
+Settings → Model → Provider: *OpenAI-compatible server*. WhisperStorm POSTs WAV audio to `<base URL>/v1/audio/transcriptions`, so any OpenAI-compatible STT server works — for example a [speaches](https://github.com/speaches-ai/speaches) (faster-whisper) container:
 
 ```bash
 docker run --rm -p 8000:8000 ghcr.io/speaches-ai/speaches:latest-cpu
 ```
 
-Then configure in Settings > Model:
-
 - **Server base URL**: `http://localhost:8000`
 - **Model name**: `Systran/faster-whisper-small` (downloaded by the server on first use)
 
-> **Note on Docker Model Runner**: as of today, Docker Model Runner serves LLMs and does not expose speech-to-text endpoints. Use the whisper container above for Docker-based transcription. As soon as Docker Model Runner offers OpenAI-compatible audio endpoints, point the base URL at it — the same provider works unchanged.
+> Docker Model Runner currently serves LLMs only and has no speech-to-text endpoint. Once it does, point the base URL at it — the same provider works unchanged.
 
-## Why signing matters (text insertion)
+## Why signing matters
 
-Text insertion (the automatic Cmd+V) needs the **Accessibility** permission, and macOS ties that permission to the app's **code signature**. Ad-hoc signing (`codesign -s -`) produces a new signature every build, which silently invalidates the grant — dictation still works, but the transcript only reaches the clipboard, never the focused field.
+Pasting (a synthesized Cmd+V) needs the **Accessibility** permission, and macOS ties that permission to the app's **code signature**. Ad-hoc signing produces a new signature every build, silently invalidating the grant. `scripts/setup-signing.sh` creates a stable self-signed identity (`WhisperStorm Dev`) that `project.yml` uses for every build, so the grant persists.
 
-`scripts/setup-signing.sh` fixes this by creating a **stable** self-signed identity (`WhisperStorm Dev`) that signs every build the same way, so the grant persists. `project.yml` references it via `CODE_SIGN_IDENTITY`.
+After the first signed build: trigger a dictation, then enable *WhisperStorm* in System Settings → Privacy & Security → **Accessibility** (and confirm the **Microphone** prompt). From then on rebuilds keep the permission. If insertion fails, WhisperStorm notifies you and logs the reason to `~/Library/Logs/WhisperStorm.log`.
 
-**Grant Accessibility once (after the first signed build):**
+> Coming from an ad-hoc build? Reset the stale entry with `tccutil reset Accessibility de.martinilabs.WhisperStorm`, then re-grant.
 
-1. Trigger a dictation (⌥ Space, speak, ⌥ Space). macOS prompts for Accessibility, or open System Settings > Privacy & Security > **Accessibility** and enable *WhisperStorm* (`build/Build/Products/Release/WhisperStorm.app`).
-2. Confirm the **Microphone** prompt on the next dictation.
+## Troubleshooting and limitations
 
-From then on, rebuilds keep the permission. If insertion ever fails, WhisperStorm notifies you and logs the reason to `~/Library/Logs/WhisperStorm.log` (trusted state, Secure Input, focus).
+- **Text only in the clipboard** — Accessibility not granted (or stale after a signing change), a secure input field (password fields, terminals with Secure Keyboard Entry) is focused, or nothing has focus.
+- **Launch at Login fails** — copy the app to `/Applications`.
+- **First transcription after switching models is slow** — one-time CoreML specialization.
+- No streaming insertion and no punctuation/LLM post-processing (by design).
+- Whisper models occasionally hallucinate short filler phrases on silent recordings.
 
-> Switching from an earlier ad-hoc build to the signed one leaves a stale Accessibility entry. Reset it cleanly with `tccutil reset Accessibility de.martinilabs.WhisperStorm` (then re-grant), or remove the old entry with **−** in the Accessibility pane and re-add.
+## Documentation
 
-## Known limitations
+- [SPEC.md](SPEC.md) — product spec, architecture, acceptance criteria, macOS constraints
+- [CLAUDE.md](CLAUDE.md) — guidance for AI coding agents working in this repo
+- [TASK.md](TASK.md) — issue log with root causes
 
-- **Launch at Login** may fail for builds run from the build folder (SMAppService prefers apps in `/Applications`). Copy the app there if you want it to start automatically.
-- **Secure input fields** (password fields, some terminals with Secure Keyboard Entry) block synthetic keystrokes; the transcript is still in the clipboard.
-- The first transcription after selecting a new model waits for CoreML model specialization (one-time, per model).
-- No streaming insertion — text is inserted after you stop recording (by design, v1).
-- No punctuation post-processing/LLM formatting (by design, v1).
-- Whisper models occasionally hallucinate short filler phrases on silent/very quiet recordings.
+## Contributing
 
-## Project layout
+Issues and pull requests are welcome. There is no test target; verify changes by building and dictating once. `WhisperStorm.xcodeproj` is generated — edit `project.yml`, not the project.
 
-```
-project.yml              XcodeGen manifest (targets, packages, entitlements, Info.plist)
-Sources/
-  WhisperStormApp.swift  @main: MenuBarExtra + Settings scenes
-  App/                   Coordinator (dictation flow), settings, hotkey, state
-  Audio/                 AVAudioEngine capture (16 kHz mono), CoreAudio device discovery
-  Transcription/         TranscriptionProvider protocol, WhisperKit + OpenAI-compatible providers, model manager, WAV encoder
-  Insertion/             Clipboard + synthesized Cmd+V (Accessibility)
-  Overlay/               Non-activating NSPanel + 60 fps cyberpunk waveform (TimelineView/Canvas)
-  Onboarding/            Permission traffic lights + deep links
-  MenuBar/, SettingsUI/  Menu and settings views
-```
+## License
+
+[MIT](LICENSE). Dependencies keep their own licenses ([WhisperKit](https://github.com/argmaxinc/argmax-oss-swift), [KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts), both MIT). Whisper model weights are subject to their own licenses.
