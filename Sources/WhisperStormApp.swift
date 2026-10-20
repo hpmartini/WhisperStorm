@@ -29,10 +29,5 @@ private struct MenuBarIconView: View {
     var body: some View {
         Image(systemName: state.menuBarSymbolName)
             .symbolRenderingMode(.hierarchical)
-            .symbolEffect(
-                .variableColor.iterative.dimInactiveLayers.nonReversing,
-                options: .repeating,
-                isActive: state.phase == .recording
-            )
     }
 }

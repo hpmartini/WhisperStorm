@@ -32,7 +32,7 @@ final class AppState: ObservableObject {
     var menuBarSymbolName: String {
         switch phase {
         case .idle, .success: "waveform"
-        case .recording: "waveform"
+        case .recording: "mic.fill"
         case .transcribing: "waveform.badge.magnifyingglass"
         case .error: "waveform.badge.exclamationmark"
         }

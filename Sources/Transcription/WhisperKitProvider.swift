@@ -78,12 +78,28 @@ actor WhisperKitProvider: TranscriptionProvider {
             throw TranscriptionError.modelLoadFailed(error.localizedDescription)
         }
 
-        let text = results
+        // Noise makes auto-detection pick languages nobody dictates in (Japanese "thanks for watching"),
+        // so with auto language only German and English results count.
+        let accepted = results.filter { request.languageCode != nil || ["de", "en"].contains($0.language) }
+        if accepted.count != results.count {
+            FileLog.write("  WHISPER \(label): dropped \(results.count - accepted.count) segment(s) of language \(results.map(\.language))")
+        }
+        let text = accepted
             .map(\.text)
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         FileLog.write("  WHISPER \(label): segments=\(results.count) chars=\(text.count)")
-        return text
+        return Self.isNoiseHallucination(text) ? "" : text
+    }
+
+    /// Whisper's stock output for noise: sound annotations ("*clap*", "[Music]"), bare punctuation,
+    /// and its subtitle-credit phrases. Dictating exactly these is rarer than hearing them in an air conditioner.
+    nonisolated private static func isNoiseHallucination(_ text: String) -> Bool {
+        let stripped = text.replacingOccurrences(of: #"[\*\[\(][^\]\)\*]*[\*\]\)]"#, with: "", options: .regularExpression)
+        let letters = stripped.filter { $0.isLetter || $0.isNumber }
+        if letters.isEmpty { return true }
+        let phrase = letters.lowercased()
+        return ["you", "thankyouforwatching", "vielendankfürszuschauen", "untertitelderamaraorg"].contains(phrase)
     }
 
     /// Peak and RMS of the buffer actually handed to the model, in dBFS.
