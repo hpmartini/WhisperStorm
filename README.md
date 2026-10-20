@@ -5,7 +5,7 @@
 WhisperStorm is a native menu-bar app. No cloud, no account, no telemetry: audio never leaves your machine.
 
 <p align="center">
-  <img src="docs/screenshots/overlay.png" alt="Listening overlay with neon waveform" width="460">
+  <img src="docs/screenshots/overlay.gif" alt="Listening overlay: neon waveform reacting to speech, then transcribing" width="520">
 </p>
 
 ## Features
