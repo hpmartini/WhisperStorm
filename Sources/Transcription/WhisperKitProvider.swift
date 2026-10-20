@@ -99,7 +99,7 @@ actor WhisperKitProvider: TranscriptionProvider {
         let letters = stripped.filter { $0.isLetter || $0.isNumber }
         if letters.isEmpty { return true }
         let phrase = letters.lowercased()
-        return ["you", "thankyouforwatching", "vielendankfürszuschauen", "untertitelderamaraorg"].contains(phrase)
+        return ["you", "thankyou", "thanksforwatching", "thankyouforwatching", "vielendankfürszuschauen", "untertitelderamaraorg"].contains(phrase)
     }
 
     /// Peak and RMS of the buffer actually handed to the model, in dBFS.

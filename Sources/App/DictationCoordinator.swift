@@ -467,8 +467,8 @@ final class DictationCoordinator: ObservableObject {
     /// (≈ −54 dBFS): far under any live microphone's room noise.
     private static let silenceThreshold: Float = 0.002
 
-    /// A 100 ms window counts as speech-level above this RMS (≈ −40 dBFS); air-conditioning noise sits near −48 dBFS.
-    private static let speechRMSThreshold: Float = 0.01
+    /// A 100 ms window counts as speech-level above this RMS (≈ −44 dBFS); air-conditioning noise sits near −48 dBFS. Speech with a −18 dBFS peak still reaches it.
+    private static let speechRMSThreshold: Float = 0.006
     /// Several loud windows are required so a single click or bump is not mistaken for speech.
     private static let minSpeechWindows = 5
 
