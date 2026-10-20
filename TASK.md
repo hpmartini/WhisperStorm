@@ -282,3 +282,54 @@ perceived freeze:
 ### Note
 Rebuilding changes the ad-hoc signature: macOS re-prompts for Microphone and
 Accessibility must be toggled off/on again in System Settings.
+
+
+## 2026-10-20 — Phantom text from room noise after MAGOS dictation, gaps in the mic signal
+
+### Issue
+After clicking "Spracheingabe" in MAGOS, WhisperStorm inserted sentences nobody
+had said (German text, "Thank you.", "you", Japanese "thanks for watching") while
+the room was only air-conditioning noise. The menu bar icon also looked like it
+flickered while recording.
+
+### Root cause
+1. The MAGOS web app (Safari web app, WebKit GPU process) calls
+   `getUserMedia({ audio: true })`. With default constraints macOS opens a
+   voice-processing audio unit (`VPAUAggregateAudioDevice`, visible in
+   `pmset -g assertions`) and it stayed open for over an hour. It distorted the
+   microphone for all other apps: the recorded WAV had ~0.5 s of digital zeros
+   every ~0.7 s (4 gaps in 3 s).
+2. Whisper turns noise into text. With language "auto" it detects languages
+   nobody dictates in (Japanese) and emits stock phrases ("*clap*",
+   "Thank you.", "ご視聴ありがとうございました").
+3. The menu bar icon had a repeating `variableColor` symbol effect while
+   recording; that was the on/off.
+
+### Fix
+- MAGOS (`frontend/src/lib/useDiktat.ts`): `getUserMedia` with
+  `echoCancellation`, `noiseSuppression`, `autoGainControl` all `false`, so no
+  voice-processing unit stays open.
+- `WhisperKitProvider`: with language "auto" only German and English results
+  count; noise annotations (`*clap*`, `[Music]`), bare punctuation and a short
+  phrase list ("you", "thank you", "thanks for watching", …) are dropped.
+- `AppState` / `WhisperStormApp`: static `mic.fill` while recording, no symbol
+  effect.
+- Tried and removed: a gate on speech-level 100 ms windows. Synthetic German
+  speech with a −18 dBFS peak had 0 of 68 windows above −40 dBFS and would have
+  been dropped, while the air-conditioning noise passed it anyway.
+
+### Verification
+- Killed the stuck WebKit GPU process: VPAU assertion gone, new recordings have
+  no zero gaps.
+- 10 live runs against the room noise: no text inserted.
+- `say` speech (de, en, also at −18 dBFS peak) fed through the production
+  pipeline transcribed word for word. `say` does not reach the mic, so live
+  speech was confirmed by the user.
+- 12 menu bar screenshots while recording: icon pixel-identical from frame 2 on.
+
+### Note
+Diagnose with the dumped `~/Library/Logs/WhisperStorm-last-recording.wav` (zero
+runs) and `pmset -g assertions | grep VPAU` (which process holds the unit).
+Remaining limit: noise that Whisper turns into a plausible German/English
+sentence is not filtered; a loud voice near the mic is indistinguishable from
+speech.
