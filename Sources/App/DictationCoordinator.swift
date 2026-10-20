@@ -291,15 +291,6 @@ final class DictationCoordinator: ObservableObject {
             reportError("No audio from \(activeDeviceLabel). Check the microphone and its input level.")
             return
         }
-        // Room noise (air conditioning, fan) is not silent but not speech either; Whisper invents
-        // sentences from it, so nothing is transcribed and nothing is inserted.
-        let loud = Self.loudWindows(samples)
-        FileLog.write("  speech check: \(loud.count) of \(loud.total) windows (100 ms) above \(Self.speechRMSThreshold) rms")
-        guard loud.count >= Self.minSpeechWindows else {
-            FileLog.write("  -> no speech, not transcribing")
-            state.phase = .idle
-            return
-        }
 
         let request = TranscriptionRequest(
             samples: samples,
@@ -466,26 +457,6 @@ final class DictationCoordinator: ObservableObject {
     /// Peak amplitude below which a recording is treated as silence
     /// (≈ −54 dBFS): far under any live microphone's room noise.
     private static let silenceThreshold: Float = 0.002
-
-    /// A 100 ms window counts as speech-level above this RMS (≈ −44 dBFS); air-conditioning noise sits near −48 dBFS. Speech with a −18 dBFS peak still reaches it.
-    private static let speechRMSThreshold: Float = 0.006
-    /// Several loud windows are required so a single click or bump is not mistaken for speech.
-    private static let minSpeechWindows = 5
-
-    private static func loudWindows(_ samples: [Float]) -> (count: Int, total: Int) {
-        let window = Int(AudioCaptureEngine.targetSampleRate / 10)
-        var count = 0
-        var total = 0
-        var start = 0
-        while start < samples.count {
-            let end = min(start + window, samples.count)
-            let energy = samples[start..<end].reduce(Float(0)) { $0 + $1 * $1 }
-            if (energy / Float(end - start)).squareRoot() >= speechRMSThreshold { count += 1 }
-            total += 1
-            start = end
-        }
-        return (count, total)
-    }
 
     /// Capture start normally takes well under a second; beyond this the
     /// device is stalling and the start itself becomes the problem.
