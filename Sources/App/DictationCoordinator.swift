@@ -361,7 +361,7 @@ final class DictationCoordinator: ObservableObject {
         }
     }
 
-    private func currentProvider() async throws -> any TranscriptionProvider {
+    func currentProvider() async throws -> any TranscriptionProvider {
         switch settings.providerKind {
         case .whisperKit:
             await whisperProvider.setVariant(settings.whisperKitModel)

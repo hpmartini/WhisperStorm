@@ -4,8 +4,13 @@ import Foundation
 /// The path follows Apple's per-user convention and matches the Rust command in pickyNotes:
 ///   ~/Library/Application Support/WhisperStorm/control.sock
 /// Protocol:
-///   one JSON request per line:  {"cmd":"start"} | {"cmd":"stop"} | {"cmd":"status"}
+///   one JSON request per line:  {"cmd":"start"} | {"cmd":"stop"} | {"cmd":"status"} | {"cmd":"transcribe","path":"/abs/audio-file"}
 ///   one JSON reply per line:    {"ok":true,"phase":"<idle|recording|transcribing|success|error>","text":"..."|null,"error":"..."|null}
+/// "transcribe" decodes the file (m4a/mp4 AAC, wav, caf, mp3; absolute regular file, <= 256 MB, <= 15 min audio) to 16 kHz mono and runs
+/// the configured TranscriptionProvider; reply {"ok":true,"phase":"success","text":"..."} or {"ok":false,"phase":"error","error":"..."}.
+/// It never touches the microphone, phase or deliveryMode; it is refused ("dictation in progress") while a dictation is starting/recording/transcribing.
+/// The 5 s idle drop only covers reading the request, so a long transcription is not cut off; the worker gives up after 110 s
+/// ("transcription timeout"), shorter than the pickyNotes client's 120 s read timeout, so the client gets that error instead of timing out.
 /// Start/stop are routed through DictationCoordinator (so all the existing logic — model warmup, ESC handling, errors — runs unchanged);
 /// when deliveryMode == .socket the coordinator skips TextInserter.insert and returns the transcript on the wire so it isn't pasted twice.
 ///
@@ -129,22 +134,39 @@ final class ControlSocketServer {
     /// Decodes the request line and runs it. Runs on a background queue: stop waits for the transcript there,
     /// because the transcription itself is scheduled on the main actor and must not be blocked.
     private nonisolated func parseAndRun(line: String) -> [String: Any] {
-        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let data = trimmed.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let cmd = obj["cmd"] as? String else {
-            return ["ok": false, "phase": "error", "error": "invalid request"]
-        }
-        switch cmd {
-        case "status":
+        switch ControlRequest.parse(line: line) {
+        case .status:
             return DispatchQueue.main.sync { ControlSocketServer.statusReply(coord: DictationCoordinator.shared) }
-        case "start":
+        case .start:
             return startReply()
-        case "stop":
+        case .stop:
             return stopReply()
-        default:
-            return ["ok": false, "phase": "error", "error": "unknown cmd"]
+        case .transcribe(let path):
+            return transcribeReply(path: path)
+        case .invalid(let message):
+            return ["ok": false, "phase": "error", "error": message]
         }
+    }
+
+    /// Runs a file transcription on a detached task and waits for it on this socket worker thread (decoding must not block the main actor).
+    private nonisolated func transcribeReply(path: String) -> [String: Any] {
+        let (busy, language): (Bool, String?) = DispatchQueue.main.sync {
+            let c = DictationCoordinator.shared
+            return (c.isStarting || c.state.phase == .recording || c.state.phase == .transcribing, c.settings.language.languageCode)
+        }
+        if busy { return ["ok": false, "phase": "error", "error": "dictation in progress"] }
+        let done = DispatchSemaphore(value: 0)
+        let box = ReplyBox()
+        let task = Task.detached {
+            let transcriber = FileTranscriber(provider: { try await DictationCoordinator.shared.currentProvider() }, languageCode: language)
+            box.set(await transcriber.run(path: path))
+            done.signal()
+        }
+        if done.wait(timeout: .now() + 110) == .timedOut {
+            task.cancel()
+            return ["ok": false, "phase": "error", "error": "transcription timeout"]
+        }
+        return box.value
     }
 
     private static func statusReply(coord: DictationCoordinator) -> [String: Any] {
@@ -237,4 +259,11 @@ private final class AbandonFlag: @unchecked Sendable {
     private var value = false
     var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
     func set() { lock.lock(); value = true; lock.unlock() }
+}
+
+private final class ReplyBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reply: [String: Any] = ["ok": false, "phase": "error", "error": "no result"]
+    var value: [String: Any] { lock.lock(); defer { lock.unlock() }; return reply }
+    func set(_ r: [String: Any]) { lock.lock(); reply = r; lock.unlock() }
 }
