@@ -95,7 +95,16 @@ final class ControlSocketTests: XCTestCase {
         assertError(await t.run(path: other.path + "/../" + dir.lastPathComponent + "/a.wav"), contains: "outside inbox")
     }
 
-    func testRejectsNonAudioFile()async throws {
+    func testRejectsAnInboxThatIsASymlink() async throws {
+        let target = try tempDir()
+        let wav = target.appendingPathComponent("a.wav")
+        try writeWAV(to: wav, sampleRate: 16_000, channels: 1, seconds: 1)
+        let link = try tempDir().appendingPathComponent("inbox")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        assertError(await transcriber(StubProvider(result: .success("x")), inbox: link).run(path: link.appendingPathComponent("a.wav").path), contains: "outside inbox")
+    }
+
+    func testRejectsNonAudioFile() async throws {
         let dir = try tempDir()
         let junk = dir.appendingPathComponent("junk.m4a")
         try Data("not audio".utf8).write(to: junk)

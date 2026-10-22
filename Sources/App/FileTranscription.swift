@@ -60,7 +60,10 @@ struct FileTranscriber {
     static func validate(path: String, inbox: URL) throws -> URL {
         guard path.hasPrefix("/") else { throw Failure("path must be absolute") }
         let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
-        guard url.path.hasPrefix(inbox.resolvingSymlinksInPath().path + "/") else { throw Failure("path outside inbox") }
+        // Resolve only the inbox's parent: if the inbox itself is a symlink (a same-user process can swap it), the file must not count as inside.
+        let inboxType = (try? FileManager.default.attributesOfItem(atPath: inbox.path)[.type]) as? FileAttributeType
+        let realInbox = inbox.deletingLastPathComponent().resolvingSymlinksInPath().appendingPathComponent(inbox.lastPathComponent)
+        guard inboxType == .typeDirectory, url.path.hasPrefix(realInbox.path + "/") else { throw Failure("path outside inbox") }
         guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]) else {
             throw Failure("file not found")
         }
