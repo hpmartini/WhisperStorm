@@ -30,6 +30,10 @@ struct FileTranscriber {
     /// Resolved lazily so the model is only loaded when a request passes validation and decoding.
     let provider: () async throws -> any TranscriptionProvider
     let languageCode: String?
+    /// Only files inside this directory are read; otherwise any same-user process could borrow WhisperStorm's TCC grants through the socket.
+    let inbox: URL
+
+    static let defaultInbox = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/WhisperStorm/inbox", isDirectory: true)
 
     static let maxFileBytes: Int64 = 256 * 1024 * 1024
     /// 10 min is the producer's limit; 15 min leaves headroom (16 kHz Float32 = ~58 MB).
@@ -42,7 +46,7 @@ struct FileTranscriber {
 
     func run(path: String) async -> [String: Any] {
         do {
-            let url = try Self.validate(path: path)
+            let url = try Self.validate(path: path, inbox: inbox)
             let samples = try Self.decode(url)
             let provider = try await provider()
             try await provider.prepare()
@@ -53,9 +57,10 @@ struct FileTranscriber {
         }
     }
 
-    static func validate(path: String) throws -> URL {
+    static func validate(path: String, inbox: URL) throws -> URL {
         guard path.hasPrefix("/") else { throw Failure("path must be absolute") }
         let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        guard url.path.hasPrefix(inbox.resolvingSymlinksInPath().path + "/") else { throw Failure("path outside inbox") }
         guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]) else {
             throw Failure("file not found")
         }

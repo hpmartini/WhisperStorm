@@ -59,8 +59,9 @@ final class ControlSocketTests: XCTestCase {
         try file.write(from: buffer)
     }
 
-    private func transcriber(_ provider: StubProvider) -> FileTranscriber {
-        FileTranscriber(provider: { provider }, languageCode: "de")
+    /// Every test file lives in tempDir(), so the temporary directory is the inbox here.
+    private func transcriber(_ provider: StubProvider, inbox: URL = FileManager.default.temporaryDirectory) -> FileTranscriber {
+        FileTranscriber(provider: { provider }, languageCode: "de", inbox: inbox)
     }
 
     private func assertError(_ reply: [String: Any], contains text: String, file: StaticString = #filePath, line: UInt = #line) {
@@ -80,7 +81,21 @@ final class ControlSocketTests: XCTestCase {
         assertError(await t.run(path: empty.path), contains: "empty")
     }
 
-    func testRejectsNonAudioFile() async throws {
+    func testRejectsFilesOutsideTheInbox() async throws {
+        let dir = try tempDir()
+        let wav = dir.appendingPathComponent("a.wav")
+        try writeWAV(to: wav, sampleRate: 16_000, channels: 1, seconds: 1)
+        let other = try tempDir()
+        let t = transcriber(StubProvider(result: .success("x")), inbox: other)
+        assertError(await t.run(path: wav.path), contains: "outside inbox")
+        // symlink inside the inbox pointing out resolves to the outside path
+        try FileManager.default.createSymbolicLink(at: other.appendingPathComponent("l.wav"), withDestinationURL: wav)
+        assertError(await t.run(path: other.appendingPathComponent("l.wav").path), contains: "outside inbox")
+        // ".." escape
+        assertError(await t.run(path: other.path + "/../" + dir.lastPathComponent + "/a.wav"), contains: "outside inbox")
+    }
+
+    func testRejectsNonAudioFile()async throws {
         let dir = try tempDir()
         let junk = dir.appendingPathComponent("junk.m4a")
         try Data("not audio".utf8).write(to: junk)

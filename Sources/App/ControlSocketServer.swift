@@ -6,7 +6,7 @@ import Foundation
 /// Protocol:
 ///   one JSON request per line:  {"cmd":"start"} | {"cmd":"stop"} | {"cmd":"status"} | {"cmd":"transcribe","path":"/abs/audio-file"}
 ///   one JSON reply per line:    {"ok":true,"phase":"<idle|recording|transcribing|success|error>","text":"..."|null,"error":"..."|null}
-/// "transcribe" decodes the file (m4a/mp4 AAC, wav, caf, mp3; absolute regular file, <= 256 MB, <= 15 min audio) to 16 kHz mono and runs
+/// "transcribe" decodes the file (m4a/mp4 AAC, wav, caf, mp3; regular file inside ~/Library/Application Support/WhisperStorm/inbox/ (other paths: "path outside inbox", so the socket cannot borrow WhisperStorm's TCC grants), <= 256 MB, <= 15 min audio) to 16 kHz mono and runs
 /// the configured TranscriptionProvider; reply {"ok":true,"phase":"success","text":"..."} or {"ok":false,"phase":"error","error":"..."}.
 /// It never touches the microphone, phase or deliveryMode; it is refused ("dictation in progress") while a dictation is starting/recording/transcribing.
 /// The 5 s idle drop only covers reading the request, so a long transcription is not cut off; the worker gives up after 110 s
@@ -158,7 +158,7 @@ final class ControlSocketServer {
         let done = DispatchSemaphore(value: 0)
         let box = ReplyBox()
         let task = Task.detached {
-            let transcriber = FileTranscriber(provider: { try await DictationCoordinator.shared.currentProvider() }, languageCode: language)
+            let transcriber = FileTranscriber(provider: { try await DictationCoordinator.shared.currentProvider() }, languageCode: language, inbox: FileTranscriber.defaultInbox)
             box.set(await transcriber.run(path: path))
             done.signal()
         }
