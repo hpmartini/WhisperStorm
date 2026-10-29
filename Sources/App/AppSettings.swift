@@ -57,6 +57,7 @@ final class AppSettings: ObservableObject {
         static let overlayOpacity = "overlayOpacity"
         static let overlayBlurRadius = "overlayBlurRadius"
         static let overlayLiquidGlass = "overlayLiquidGlass"
+        static let duckOutputWhileRecording = "duckOutputWhileRecording"
     }
 
     nonisolated static let defaultWhisperKitModel = "openai_whisper-small"
@@ -118,6 +119,11 @@ final class AppSettings: ObservableObject {
         return false
     }
 
+    /// Lower the system output volume while recording, so playback neither distracts nor bleeds into the mic.
+    @Published var duckOutputWhileRecording: Bool {
+        didSet { defaults.set(duckOutputWhileRecording, forKey: Keys.duckOutputWhileRecording) }
+    }
+
     @Published var hasCompletedOnboarding: Bool {
         didSet { defaults.set(hasCompletedOnboarding, forKey: Keys.hasCompletedOnboarding) }
     }
@@ -137,5 +143,6 @@ final class AppSettings: ObservableObject {
         overlayOpacity = defaults.object(forKey: Keys.overlayOpacity) as? Double ?? 0.5
         overlayBlurRadius = defaults.object(forKey: Keys.overlayBlurRadius) as? Double ?? 20
         overlayLiquidGlass = defaults.object(forKey: Keys.overlayLiquidGlass) as? Bool ?? true
+        duckOutputWhileRecording = defaults.object(forKey: Keys.duckOutputWhileRecording) as? Bool ?? true
     }
 }

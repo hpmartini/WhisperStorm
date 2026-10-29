@@ -45,6 +45,8 @@ struct GeneralSettingsView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
+            Toggle("Lower other audio while recording", isOn: $settings.duckOutputWhileRecording)
+
             if #available(macOS 26, *) {
                 Toggle("Liquid Glass overlay", isOn: $settings.overlayLiquidGlass)
             }

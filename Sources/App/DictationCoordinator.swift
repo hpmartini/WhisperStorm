@@ -24,6 +24,7 @@ final class DictationCoordinator: ObservableObject {
     let modelManager = WhisperModelManager()
 
     private lazy var captureEngine = AudioCaptureEngine(levelStore: levelStore)
+    private let outputDucker = OutputDucker()
     private let whisperProvider = WhisperKitProvider()
     private var overlayController: OverlayPanelController?
     private let onboardingController = OnboardingWindowController()
@@ -68,6 +69,29 @@ final class DictationCoordinator: ObservableObject {
         KeyboardShortcuts.Name.unbindPushToTalkIfDuplicate()
         setUpHotkey()
         setUpModelWarmUp()
+        setUpOutputDucking()
+    }
+
+    /// Ducks while the phase is `.recording` and restores on any exit from it
+    /// (stop, Esc, error, device loss), so no end path can leave the Mac quiet.
+    private func setUpOutputDucking() {
+        outputDucker.recoverAfterCrash()
+        state.$phase
+            .map { $0 == .recording }
+            .removeDuplicates()
+            .sink { [weak self] recording in
+                guard let self else { return }
+                if recording, settings.duckOutputWhileRecording {
+                    outputDucker.duck()
+                } else if !recording {
+                    outputDucker.restore()
+                }
+            }
+            .store(in: &settingsCancellables)
+    }
+
+    func restoreOutputVolume() {
+        outputDucker.restore()
     }
 
     /// First load of a model triggers CoreML/ANE specialization (minutes for

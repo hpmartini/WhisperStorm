@@ -19,5 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         ControlSocketServer.shared.stop()
+        // Quitting mid-recording never leaves `.recording`, so the phase observer would not restore.
+        DictationCoordinator.shared.restoreOutputVolume()
     }
 }
