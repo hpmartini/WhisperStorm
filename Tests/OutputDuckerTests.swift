@@ -1,3 +1,4 @@
+import Combine
 import CoreAudio
 import XCTest
 
@@ -113,6 +114,56 @@ final class OutputDuckerTests: XCTestCase {
         fake.volumes[42] = 0.9
         makeDucker().recoverAfterCrash()
         XCTAssertEqual(fake.volumes[42]!, 0.9, accuracy: 0.0001)
+    }
+
+    // AC-2: each end path, as the coordinator's phase transitions express it.
+    private func assertRestored(after end: AppState.Phase, file: StaticString = #filePath, line: UInt = #line) {
+        let phase = PassthroughSubject<AppState.Phase, Never>()
+        let ducker = makeDucker()
+        let subscription = ducker.follow(phase) { true }
+        defer { subscription.cancel() }
+        phase.send(.idle)
+        phase.send(.recording)
+        XCTAssertEqual(fake.volumes[42]!, 0.05, accuracy: 0.0001, "ducked while recording", file: file, line: line)
+        phase.send(end)
+        XCTAssertEqual(fake.volumes[42]!, 0.5, accuracy: 0.0001, "restored after \(end)", file: file, line: line)
+        XCTAssertFalse(ducker.isDucked, file: file, line: line)
+    }
+
+    /// `stopDictation` hands the clip to transcription.
+    func testStopRestores() { assertRestored(after: .transcribing) }
+    /// `cancelDictation` (Esc) and a too-short recording go straight to idle.
+    func testEscCancelRestores() { assertRestored(after: .idle) }
+    /// Silent recording, capture failure and a lost device all go through `reportError`.
+    func testErrorAndDeviceLossRestore() { assertRestored(after: .error("Recording stopped: device gone")) }
+
+    func testFollowDoesNotDuckWhenSettingOff() {
+        let phase = PassthroughSubject<AppState.Phase, Never>()
+        let subscription = makeDucker().follow(phase) { false }
+        defer { subscription.cancel() }
+        phase.send(.recording)
+        phase.send(.transcribing)
+        XCTAssertEqual(fake.setCalls, 0)
+    }
+
+    // AC-5: the skip lands in the real ~/Library/Logs/WhisperStorm.log.
+    func testSkipIsWrittenToTheAppLogFile() throws {
+        fake.volumes = [:]
+        let marker = "no settable volume"
+        let start = Date()
+        OutputDucker(control: fake, defaults: defaults).duck()
+        // FileLog appends asynchronously on its own queue.
+        var found = false
+        for _ in 0..<50 where !found {
+            let text = (try? String(contentsOf: FileLog.url, encoding: .utf8)) ?? ""
+            found = text.split(separator: "\n").suffix(20).contains { line in
+                guard line.contains("DUCK skipped: output device 42 has \(marker)"),
+                      let stamp = ISO8601DateFormatter().date(from: String(line.prefix(20))) else { return false }
+                return stamp >= start.addingTimeInterval(-1)
+            }
+            if !found { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        XCTAssertTrue(found, "expected a skip line in \(FileLog.url.path)")
     }
 
     // AC-5

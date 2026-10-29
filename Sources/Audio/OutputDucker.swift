@@ -1,4 +1,5 @@
 import AudioToolbox
+import Combine
 import CoreAudio
 import Foundation
 
@@ -92,6 +93,22 @@ final class OutputDucker {
         } else {
             log("RESTORE failed: could not set volume on output device \(device)")
         }
+    }
+
+    /// Ducks while the phase is `.recording` and restores on any exit from it
+    /// (stop, Esc, error, device loss), so no end path can leave the Mac quiet.
+    func follow<P: Publisher>(_ phase: P, enabled: @escaping () -> Bool) -> AnyCancellable
+    where P.Output == AppState.Phase, P.Failure == Never {
+        phase
+            .map { $0 == .recording }
+            .removeDuplicates()
+            .sink { [weak self] recording in
+                if recording, enabled() {
+                    self?.duck()
+                } else if !recording {
+                    self?.restore()
+                }
+            }
     }
 
     /// Undoes a duck left behind by a crash during recording.

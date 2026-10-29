@@ -72,22 +72,12 @@ final class DictationCoordinator: ObservableObject {
         setUpOutputDucking()
     }
 
-    /// Ducks while the phase is `.recording` and restores on any exit from it
-    /// (stop, Esc, error, device loss), so no end path can leave the Mac quiet.
     private func setUpOutputDucking() {
         outputDucker.recoverAfterCrash()
-        state.$phase
-            .map { $0 == .recording }
-            .removeDuplicates()
-            .sink { [weak self] recording in
-                guard let self else { return }
-                if recording, settings.duckOutputWhileRecording {
-                    outputDucker.duck()
-                } else if !recording {
-                    outputDucker.restore()
-                }
-            }
-            .store(in: &settingsCancellables)
+        outputDucker.follow(state.$phase) { [weak self] in
+            self?.settings.duckOutputWhileRecording ?? false
+        }
+        .store(in: &settingsCancellables)
     }
 
     func restoreOutputVolume() {

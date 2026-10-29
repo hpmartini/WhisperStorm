@@ -23,6 +23,7 @@ targets:
       - Tests
       - path: Sources
         includes:
+          - App/AppState.swift
           - Audio/OutputDucker.swift
           - Support/FileLog.swift
     settings:
