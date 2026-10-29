@@ -5,10 +5,12 @@ private final class FakeVolume: OutputVolumeControl {
     var defaultDevice: AudioDeviceID? = 42
     /// Missing entry = device gone or volume not settable.
     var volumes: [AudioDeviceID: Float] = [42: 0.5]
+    var uids: [AudioDeviceID: String] = [42: "speakers", 7: "headphones"]
     var setCalls = 0
 
     func defaultOutputDevice() -> AudioDeviceID? { defaultDevice }
     func volume(of device: AudioDeviceID) -> Float? { volumes[device] }
+    func uid(of device: AudioDeviceID) -> String? { uids[device] }
     func setVolume(_ volume: Float, of device: AudioDeviceID) -> Bool {
         guard volumes[device] != nil else { return false }
         setCalls += 1
@@ -18,14 +20,20 @@ private final class FakeVolume: OutputVolumeControl {
 }
 
 final class OutputDuckerTests: XCTestCase {
+    private var suiteName = ""
     private var defaults: UserDefaults!
     private var fake: FakeVolume!
     private var logLines: [String] = []
 
     override func setUp() {
-        defaults = UserDefaults(suiteName: "OutputDuckerTests-\(UUID().uuidString)")
+        suiteName = "OutputDuckerTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
         fake = FakeVolume()
         logLines = []
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
     }
 
     private func makeDucker() -> OutputDucker {
@@ -96,6 +104,15 @@ final class OutputDuckerTests: XCTestCase {
         relaunched.recoverAfterCrash()
         XCTAssertEqual(fake.volumes[42]!, 0.5, accuracy: 0.0001)
         XCTAssertFalse(relaunched.isDucked)
+    }
+
+    // AC-4: after a reboot the stored ID may name another device — leave that one alone.
+    func testRecoverySkipsDeviceWhoseUIDChanged() {
+        makeDucker().duck()
+        fake.uids[42] = "hdmi-monitor"
+        fake.volumes[42] = 0.9
+        makeDucker().recoverAfterCrash()
+        XCTAssertEqual(fake.volumes[42]!, 0.9, accuracy: 0.0001)
     }
 
     // AC-5

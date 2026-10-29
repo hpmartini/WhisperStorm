@@ -8,6 +8,8 @@ protocol OutputVolumeControl {
     /// nil when the device is gone or has no settable volume (HDMI, digital outs).
     func volume(of device: AudioDeviceID) -> Float?
     func setVolume(_ volume: Float, of device: AudioDeviceID) -> Bool
+    /// Persistent identity of a device; AudioDeviceIDs are reassigned across reboots.
+    func uid(of device: AudioDeviceID) -> String?
 }
 
 /// Lowers the default output while recording and restores it afterwards.
@@ -22,6 +24,7 @@ final class OutputDucker {
 
     private enum Keys {
         static let device = "duckedOutputDevice"
+        static let uid = "duckedOutputDeviceUID"
         static let original = "duckedOutputOriginalVolume"
         static let ducked = "duckedOutputDuckedVolume"
     }
@@ -55,6 +58,7 @@ final class OutputDucker {
         let target = original * Self.duckFactor
         // Persist first: a crash between set and save would otherwise leave the Mac quiet for good.
         defaults.set(Int(device), forKey: Keys.device)
+        defaults.set(control.uid(of: device), forKey: Keys.uid)
         defaults.set(original, forKey: Keys.original)
         defaults.set(target, forKey: Keys.ducked)
         guard control.setVolume(target, of: device) else {
@@ -70,11 +74,12 @@ final class OutputDucker {
     func restore() {
         guard isDucked else { return }
         defer { clear() }
-        // shortcut: AudioDeviceID is only stable within one boot, so crash recovery after a reboot may miss; persist the device UID if that matters.
         let device = AudioDeviceID(defaults.integer(forKey: Keys.device))
         let original = defaults.float(forKey: Keys.original)
         let ducked = defaults.float(forKey: Keys.ducked)
-        guard let current = control.volume(of: device) else {
+        // After a reboot the same ID can name another device; never set its volume.
+        guard control.uid(of: device) == defaults.string(forKey: Keys.uid),
+              let current = control.volume(of: device) else {
             log("RESTORE skipped: output device \(device) is gone")
             return
         }
@@ -98,6 +103,7 @@ final class OutputDucker {
 
     private func clear() {
         defaults.removeObject(forKey: Keys.device)
+        defaults.removeObject(forKey: Keys.uid)
         defaults.removeObject(forKey: Keys.original)
         defaults.removeObject(forKey: Keys.ducked)
     }
@@ -137,6 +143,21 @@ struct CoreAudioOutputVolume: OutputVolumeControl {
         var value = Float32(min(max(volume, 0), 1))
         let size = UInt32(MemoryLayout<Float32>.size)
         return AudioObjectSetPropertyData(device, &address, 0, nil, size, &value) == noErr
+    }
+
+    func uid(of device: AudioDeviceID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var value: CFString?
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        let status = withUnsafeMutablePointer(to: &value) { pointer in
+            AudioObjectGetPropertyData(device, &address, 0, nil, &size, pointer)
+        }
+        guard status == noErr, let value else { return nil }
+        return value as String
     }
 
     /// The same main-volume control the menu bar slider moves.
