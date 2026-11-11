@@ -8,13 +8,18 @@ import Foundation
 /// expose STT endpoints — use the mentioned whisper container for
 /// Docker-based transcription. As soon as Docker Model Runner offers audio
 /// endpoints, this same provider class works unchanged against its URL.
-struct OpenAICompatibleProvider: TranscriptionProvider {
-    let baseURL: String
-    let model: String
+public struct OpenAICompatibleProvider: TranscriptionProvider {
+    public let baseURL: String
+    public let model: String
 
-    var displayName: String { "OpenAI-compatible server" }
+    public init(baseURL: String, model: String) {
+        self.baseURL = baseURL
+        self.model = model
+    }
 
-    func transcribe(_ request: TranscriptionRequest) async throws -> String {
+    public var displayName: String { "OpenAI-compatible server" }
+
+    public func transcribe(_ request: TranscriptionRequest) async throws -> String {
         guard request.duration >= 0.35 else {
             throw TranscriptionError.recordingTooShort
         }

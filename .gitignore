@@ -7,3 +7,8 @@ DerivedData/
 
 # macOS
 .DS_Store
+
+# SwiftPM (root manifest for remote consumers)
+.build/
+.swiftpm/
+/Package.resolved
