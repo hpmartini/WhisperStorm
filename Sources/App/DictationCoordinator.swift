@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import SwiftUI
+import WhisperStormTranscription
 import AppKit
 import CoreAudio
 import KeyboardShortcuts
@@ -24,7 +25,11 @@ final class DictationCoordinator: ObservableObject {
     let modelManager = WhisperModelManager()
 
     private lazy var captureEngine = AudioCaptureEngine(levelStore: levelStore)
-    private let whisperProvider = WhisperKitProvider()
+    private let whisperProvider = WhisperKitProvider(
+        variant: AppSettings.defaultWhisperKitModel,
+        diagnostics: { FileLog.write($0) },
+        recordingDumpURL: FileLog.url.deletingLastPathComponent().appending(path: "WhisperStorm-last-recording.wav")
+    )
     private var overlayController: OverlayPanelController?
     private let onboardingController = OnboardingWindowController()
 

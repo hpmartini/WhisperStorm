@@ -28,7 +28,7 @@ Requires `brew install xcodegen`. After editing `project.yml` (targets, packages
 
 `WhisperStormApp.swift` is `@main`: a `MenuBarExtra` scene (no Dock icon — `LSUIElement: true`) plus a `Settings` scene, both injecting `coordinator` and its sub-objects as environment objects. `AppDelegate` handles launch-time onboarding/permission checks.
 
-**Transcription is a swappable protocol.** `TranscriptionProvider` (16 kHz mono Float32 PCM in, text out) has two implementations selected via `AppSettings.providerKind`:
+**Transcription is a swappable protocol**, living in the local Swift package `Packages/WhisperStormTranscription` (macOS 14 + iOS 17, shared with the iOS dictation client; only that package depends on WhisperKit). `swift test --package-path Packages/WhisperStormTranscription` runs its tests. `TranscriptionProvider` (16 kHz mono Float32 PCM in, text out) has two implementations selected via `AppSettings.providerKind`:
 - `WhisperKitProvider` — an `actor` that caches the loaded CoreML pipeline and reloads only when the model variant changes.
 - `OpenAICompatibleProvider` — POSTs WAV (via `WAVEncoder`) to `<baseURL>/v1/audio/transcriptions`. Any OpenAI-compatible STT server works (e.g. a `speaches`/faster-whisper Docker container).
 

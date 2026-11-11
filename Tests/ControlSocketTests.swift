@@ -1,4 +1,5 @@
 import AVFoundation
+import WhisperStormTranscription
 import XCTest
 
 private struct StubProvider: TranscriptionProvider {

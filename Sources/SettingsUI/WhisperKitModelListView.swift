@@ -1,3 +1,4 @@
+import WhisperStormTranscription
 import SwiftUI
 
 /// Model list with download progress, activation and removal.

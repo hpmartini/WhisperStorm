@@ -1,3 +1,4 @@
+import WhisperStormTranscription
 import Foundation
 
 /// Unix-domain socket server that exposes WhisperStorm's dictation flow to pickyNotes (and other local clients) over a newline-delimited JSON protocol.

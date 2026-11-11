@@ -1,3 +1,4 @@
+import WhisperStormTranscription
 import AVFoundation
 import Foundation
 
