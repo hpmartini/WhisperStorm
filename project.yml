@@ -27,6 +27,8 @@ targets:
           - App/AppState.swift
           - Audio/AudioCaptureEngine.swift
           - Audio/AudioDeviceManager.swift
+          - Audio/OutputDucker.swift
+          - Support/FileLog.swift
           - Support/Log.swift
     dependencies:
       - package: WhisperStormTranscription
