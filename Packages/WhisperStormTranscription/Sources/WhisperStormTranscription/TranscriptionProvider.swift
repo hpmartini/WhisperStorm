@@ -1,17 +1,25 @@
 import Foundation
 
 /// Input for a transcription run: 16 kHz mono Float32 PCM plus language hint.
-struct TranscriptionRequest {
-    let samples: [Float]
-    /// ISO 639-1 code ("de", "en") or nil for auto-detect.
-    let languageCode: String?
+public struct TranscriptionRequest {
+    /// Sample rate every provider expects; capture code converts to it.
+    public static let sampleRate: Double = 16_000
 
-    var duration: TimeInterval {
-        Double(samples.count) / AudioCaptureEngine.targetSampleRate
+    public let samples: [Float]
+    /// ISO 639-1 code ("de", "en") or nil for auto-detect.
+    public let languageCode: String?
+
+    public init(samples: [Float], languageCode: String?) {
+        self.samples = samples
+        self.languageCode = languageCode
+    }
+
+    public var duration: TimeInterval {
+        Double(samples.count) / Self.sampleRate
     }
 }
 
-enum TranscriptionError: LocalizedError {
+public enum TranscriptionError: LocalizedError {
     case modelNotDownloaded(String)
     case modelLoadFailed(String)
     case recordingTooShort
@@ -21,7 +29,7 @@ enum TranscriptionError: LocalizedError {
     case serverError(Int, String)
     case invalidServerResponse
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .modelNotDownloaded(let variant):
             "Model \"\(variant)\" is not downloaded. Open Settings > Model to download it."
@@ -44,7 +52,7 @@ enum TranscriptionError: LocalizedError {
 }
 
 /// Pluggable speech-to-text backend: 16 kHz PCM in, text out.
-protocol TranscriptionProvider {
+public protocol TranscriptionProvider {
     var displayName: String { get }
     /// Performs any expensive one-time setup (e.g. model loading) so callers
     /// can surface progress to the user before `transcribe` runs.
@@ -53,5 +61,5 @@ protocol TranscriptionProvider {
 }
 
 extension TranscriptionProvider {
-    func prepare() async throws {}
+    public func prepare() async throws {}
 }

@@ -1,7 +1,7 @@
 import Foundation
 import WhisperKit
 
-enum ModelDownloadState: Equatable {
+public enum ModelDownloadState: Equatable {
     case notDownloaded
     case downloading(Double)
     case downloaded
@@ -12,16 +12,16 @@ enum ModelDownloadState: Equatable {
 /// presence checks and removal. Models live under
 /// `~/Library/Application Support/WhisperStorm/models`.
 @MainActor
-final class WhisperModelManager: ObservableObject {
-    struct ModelInfo: Identifiable {
-        let variant: String
-        let displayName: String
-        let sizeHint: String
-        let detail: String
-        var id: String { variant }
+public final class WhisperModelManager: ObservableObject {
+    public struct ModelInfo: Identifiable {
+        public let variant: String
+        public let displayName: String
+        public let sizeHint: String
+        public let detail: String
+        public var id: String { variant }
     }
 
-    static let curated: [ModelInfo] = [
+    public static let curated: [ModelInfo] = [
         ModelInfo(
             variant: "openai_whisper-tiny",
             displayName: "Tiny",
@@ -53,24 +53,24 @@ final class WhisperModelManager: ObservableObject {
     // so the base is the WhisperStorm folder and models end up in
     // WhisperStorm/models/argmaxinc/whisperkit-coreml/<variant>.
 
-    nonisolated static var downloadBase: URL {
+    public nonisolated static var downloadBase: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "WhisperStorm")
     }
 
-    nonisolated static var modelsRoot: URL {
+    public nonisolated static var modelsRoot: URL {
         downloadBase.appending(path: "models/argmaxinc/whisperkit-coreml")
     }
 
-    nonisolated static var tokenizerFolder: URL {
+    public nonisolated static var tokenizerFolder: URL {
         downloadBase.appending(path: "tokenizers")
     }
 
-    nonisolated static func modelFolderURL(for variant: String) -> URL {
+    public nonisolated static func modelFolderURL(for variant: String) -> URL {
         modelsRoot.appending(path: variant)
     }
 
-    nonisolated static func isDownloaded(_ variant: String) -> Bool {
+    public nonisolated static func isDownloaded(_ variant: String) -> Bool {
         let folder = modelFolderURL(for: variant)
         let requiredItems = ["config.json", "AudioEncoder.mlmodelc", "TextDecoder.mlmodelc", "MelSpectrogram.mlmodelc"]
         return requiredItems.allSatisfy {
@@ -80,25 +80,25 @@ final class WhisperModelManager: ObservableObject {
 
     // MARK: - State
 
-    @Published private(set) var states: [String: ModelDownloadState] = [:]
+    @Published public private(set) var states: [String: ModelDownloadState] = [:]
 
     /// Variant currently being warmed up (CoreML specialization on first load).
-    @Published var preparingVariant: String?
+    @Published public var preparingVariant: String?
 
     /// Called on the main actor after a variant finished downloading.
-    var onModelDownloaded: ((String) -> Void)?
+    public var onModelDownloaded: ((String) -> Void)?
 
     private var downloadTasks: [String: Task<Void, Never>] = [:]
 
-    init() {
+    public init() {
         refresh()
     }
 
-    func state(for variant: String) -> ModelDownloadState {
+    public func state(for variant: String) -> ModelDownloadState {
         states[variant] ?? .notDownloaded
     }
 
-    func refresh() {
+    public func refresh() {
         for model in Self.curated {
             if case .downloading = states[model.variant] { continue }
             states[model.variant] = Self.isDownloaded(model.variant) ? .downloaded : .notDownloaded
@@ -107,7 +107,7 @@ final class WhisperModelManager: ObservableObject {
 
     // MARK: - Download
 
-    func download(_ variant: String) {
+    public func download(_ variant: String) {
         guard downloadTasks[variant] == nil else { return }
         states[variant] = .downloading(0)
         Log.transcription.info("Starting download of \(variant)")
@@ -145,11 +145,11 @@ final class WhisperModelManager: ObservableObject {
         }
     }
 
-    func cancelDownload(_ variant: String) {
+    public func cancelDownload(_ variant: String) {
         downloadTasks[variant]?.cancel()
     }
 
-    func remove(_ variant: String) {
+    public func remove(_ variant: String) {
         try? FileManager.default.removeItem(at: Self.modelFolderURL(for: variant))
         refresh()
     }

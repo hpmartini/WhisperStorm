@@ -1,8 +1,8 @@
 import Foundation
 
 /// Encodes Float32 PCM samples as a 16-bit mono WAV file in memory.
-enum WAVEncoder {
-    static func encode(samples: [Float], sampleRate: Int = Int(AudioCaptureEngine.targetSampleRate)) -> Data {
+public enum WAVEncoder {
+    public static func encode(samples: [Float], sampleRate: Int = Int(TranscriptionRequest.sampleRate)) -> Data {
         let bytesPerSample = 2
         let dataSize = samples.count * bytesPerSample
         let byteRate = sampleRate * bytesPerSample

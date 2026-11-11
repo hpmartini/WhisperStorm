@@ -1,44 +1,61 @@
 import Foundation
 import WhisperKit
 
+/// Default model when the caller names none.
+public let defaultWhisperKitVariant = "openai_whisper-small"
+
 /// Local CoreML transcription via WhisperKit. Keeps the loaded pipeline
 /// cached across dictations and reloads only when the model variant changes.
-actor WhisperKitProvider: TranscriptionProvider {
-    nonisolated var displayName: String { "WhisperKit" }
+public actor WhisperKitProvider: TranscriptionProvider {
+    public nonisolated var displayName: String { "WhisperKit" }
 
     private var pipeline: WhisperKit?
     private var loadedVariant: String?
-    private var desiredVariant = AppSettings.defaultWhisperKitModel
+    private var desiredVariant: String
+    /// Receives per-run diagnostics (levels, segment counts); the macOS app writes them to its file log.
+    private let diagnostics: (@Sendable (String) -> Void)?
+    /// Where to write the exact buffer sent to the model, or nil to skip.
+    private let recordingDumpURL: URL?
 
-    func setVariant(_ variant: String) {
+    public init(
+        variant: String = defaultWhisperKitVariant,
+        diagnostics: (@Sendable (String) -> Void)? = nil,
+        recordingDumpURL: URL? = nil
+    ) {
+        desiredVariant = variant
+        self.diagnostics = diagnostics
+        self.recordingDumpURL = recordingDumpURL
+    }
+
+    public func setVariant(_ variant: String) {
         desiredVariant = variant
     }
 
     /// Whether the pipeline for the desired variant is already in memory.
-    var isReady: Bool {
+    public var isReady: Bool {
         pipeline != nil && loadedVariant == desiredVariant
     }
 
     /// Loads the pipeline. The first load of a model triggers CoreML/ANE
     /// specialization, which can take several minutes for large models.
-    func prepare() async throws {
+    public func prepare() async throws {
         _ = try await loadPipelineIfNeeded()
     }
 
     /// Preloads the pipeline (CoreML specialization + tokenizer fetch) so the
     /// first dictation is fast. Errors are ignored; they resurface on use.
-    func warmUp() async {
+    public func warmUp() async {
         _ = try? await loadPipelineIfNeeded()
     }
 
-    func transcribe(_ request: TranscriptionRequest) async throws -> String {
+    public func transcribe(_ request: TranscriptionRequest) async throws -> String {
         guard request.duration >= 0.35 else {
             throw TranscriptionError.recordingTooShort
         }
         let pipe = try await loadPipelineIfNeeded()
 
-        Self.dumpRecording(request.samples)
-        FileLog.write("  WHISPER in: \(Self.levelDescription(request.samples)) lang=\(request.languageCode ?? "auto")")
+        dumpRecording(request.samples)
+        diagnostics?("  WHISPER in: \(Self.levelDescription(request.samples)) lang=\(request.languageCode ?? "auto")")
 
         let text = try await run(pipe, request: request, chunking: .vad, label: "vad")
         if !text.isEmpty {
@@ -74,7 +91,7 @@ actor WhisperKitProvider: TranscriptionProvider {
         do {
             results = try await pipe.transcribe(audioArray: request.samples, decodeOptions: options)
         } catch {
-            FileLog.write("  WHISPER \(label) threw: \(error.localizedDescription)")
+            diagnostics?("  WHISPER \(label) threw: \(error.localizedDescription)")
             throw TranscriptionError.modelLoadFailed(error.localizedDescription)
         }
 
@@ -82,13 +99,13 @@ actor WhisperKitProvider: TranscriptionProvider {
         // so with auto language only German and English results count.
         let accepted = results.filter { request.languageCode != nil || ["de", "en"].contains($0.language) }
         if accepted.count != results.count {
-            FileLog.write("  WHISPER \(label): dropped \(results.count - accepted.count) segment(s) of language \(results.map(\.language))")
+            diagnostics?("  WHISPER \(label): dropped \(results.count - accepted.count) segment(s) of language \(results.map(\.language))")
         }
         let text = accepted
             .map(\.text)
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        FileLog.write("  WHISPER \(label): segments=\(results.count) chars=\(text.count)")
+        diagnostics?("  WHISPER \(label): segments=\(results.count) chars=\(text.count)")
         return Self.isNoiseHallucination(text) ? "" : text
     }
 
@@ -115,9 +132,8 @@ actor WhisperKitProvider: TranscriptionProvider {
 
     /// Writes the exact 16 kHz buffer sent to the model next to the log, so a
     /// failed transcription can be listened to instead of guessed about.
-    nonisolated private static func dumpRecording(_ samples: [Float]) {
-        let url = FileLog.url.deletingLastPathComponent()
-            .appending(path: "WhisperStorm-last-recording.wav")
+    private func dumpRecording(_ samples: [Float]) {
+        guard let url = recordingDumpURL else { return }
         try? WAVEncoder.encode(samples: samples).write(to: url)
     }
 
