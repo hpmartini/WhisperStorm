@@ -33,21 +33,29 @@ final class OutputDucker {
     private let control: OutputVolumeControl
     private let defaults: UserDefaults
     private let log: (String) -> Void
+    private let externalRecorderActive: () -> Bool
 
     init(
         control: OutputVolumeControl = CoreAudioOutputVolume(),
         defaults: UserDefaults = .standard,
-        log: @escaping (String) -> Void = FileLog.write
+        log: @escaping (String) -> Void = FileLog.write,
+        externalRecorderActive: @escaping () -> Bool = { TapeStormRecording.isActive() }
     ) {
         self.control = control
         self.defaults = defaults
         self.log = log
+        self.externalRecorderActive = externalRecorderActive
     }
 
     var isDucked: Bool { defaults.object(forKey: Keys.device) != nil }
 
     func duck() {
         guard !isDucked else { return }
+        // The user is on a call TapeStorm records; a quieter far side would make them miss what is said.
+        guard !externalRecorderActive() else {
+            log("DUCK skipped: TapeStorm is recording a call")
+            return
+        }
         guard let device = control.defaultOutputDevice() else {
             log("DUCK skipped: no default output device")
             return
@@ -123,6 +131,19 @@ final class OutputDucker {
         defaults.removeObject(forKey: Keys.uid)
         defaults.removeObject(forKey: Keys.original)
         defaults.removeObject(forKey: Keys.ducked)
+    }
+}
+
+/// TapeStorm (call recorder) keeps its PID in this file while it records.
+enum TapeStormRecording {
+    static let pidFileURL = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent("Library/Application Support/TapeStorm/recording.pid")
+
+    /// A file left behind by a crashed TapeStorm names a dead PID and does not count.
+    static func isActive(at url: URL = pidFileURL, isAlive: (pid_t) -> Bool = { kill($0, 0) == 0 }) -> Bool {
+        guard let text = try? String(contentsOf: url, encoding: .utf8),
+              let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0 else { return false }
+        return isAlive(pid)
     }
 }
 

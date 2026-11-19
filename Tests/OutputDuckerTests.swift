@@ -184,4 +184,25 @@ final class OutputDuckerTests: XCTestCase {
         ducker.duck()
         XCTAssertFalse(ducker.isDucked)
     }
+
+    // TapeStorm records calls: ducking would make the far side inaudible, so it is skipped while TapeStorm records.
+    func testDuckIsSkippedWhileTapeStormRecords() {
+        let ducker = OutputDucker(control: fake, defaults: defaults, log: { self.logLines.append($0) }, externalRecorderActive: { true })
+        ducker.duck()
+        XCTAssertEqual(fake.volumes[42]!, 0.5, accuracy: 0.0001)
+        XCTAssertFalse(ducker.isDucked)
+        XCTAssertTrue(logLines.contains { $0.contains("TapeStorm") })
+    }
+
+    func testTapeStormRecordingNeedsALivePidFile() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tapestorm-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertFalse(TapeStormRecording.isActive(at: url))
+        try "\(getpid())\n".write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertTrue(TapeStormRecording.isActive(at: url))
+        // A crashed TapeStorm leaves the file behind; a dead PID must not keep ducking off.
+        XCTAssertFalse(TapeStormRecording.isActive(at: url, isAlive: { _ in false }))
+        try "garbage".write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertFalse(TapeStormRecording.isActive(at: url))
+    }
 }
