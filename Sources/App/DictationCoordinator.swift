@@ -12,9 +12,10 @@ import KeyboardShortcuts
 final class DictationCoordinator: ObservableObject {
     static let shared = DictationCoordinator()
 
-    /// How a dictation result is delivered. The hotkey path uses `.hotkey` (pastes via CGEvent + Accessibility);
+    /// How a dictation result is delivered. Hotkey and menu recordings use `.hotkey` (pastes via CGEvent + Accessibility);
     /// the Unix-socket control server uses `.socket` so the caller (pickyNotes) can read the transcript over
-    /// the wire instead of pasting it twice.
+    /// the wire instead of pasting it twice. Set by every recording that actually starts, so a socket recording
+    /// that never got its stop (cancelled with Esc, client gone) cannot turn off pasting for later hotkey dictations.
     enum DeliveryMode { case hotkey, socket }
     var deliveryMode: DeliveryMode = .hotkey
 
@@ -134,7 +135,7 @@ final class DictationCoordinator: ObservableObject {
             pttKeyIsDown = true
             pttKeyDownAt = Date()
             Task {
-                await self.startDictation()
+                await self.startDictation(delivery: .hotkey)
                 // The key may already be released by the time the audio
                 // engine is running — stop right away unless a tap latched it.
                 if !self.pttKeyIsDown, !self.pttLatched {
@@ -202,15 +203,15 @@ final class DictationCoordinator: ObservableObject {
             if isStarting {
                 stopDictation()
             } else {
-                Task { await startDictation() }
+                Task { await startDictation(delivery: .hotkey) }
             }
         case .transcribing:
             break
         }
     }
 
-    func startDictation() async {
-        FileLog.write("START requested, phase=\(state.phase)")
+    func startDictation(delivery: DeliveryMode) async {
+        FileLog.write("START requested, phase=\(state.phase) delivery=\(delivery)")
         switch state.phase {
         case .recording, .transcribing:
             FileLog.write("  -> ignored: already \(state.phase)")
@@ -224,6 +225,7 @@ final class DictationCoordinator: ObservableObject {
         }
         isStarting = true
         stopAfterStart = false
+        deliveryMode = delivery
         defer { isStarting = false }
         guard await AudioCaptureEngine.requestMicrophoneAccess() else {
             FileLog.write("  -> microphone access denied")
@@ -373,6 +375,7 @@ final class DictationCoordinator: ObservableObject {
                 }
             } else {
                 // Socket delivery: the caller reads the transcript over the wire.
+                FileLog.write("  -> socket delivery: transcript returned to the client, not pasted")
                 state.phase = .success
             }
             scheduleReturnToIdle(after: 0.8)
