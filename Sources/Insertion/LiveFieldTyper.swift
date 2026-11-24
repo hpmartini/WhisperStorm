@@ -26,6 +26,7 @@ final class LiveFieldTyper {
     private let abort: AbortFlag
     private let postQueue = DispatchQueue(label: "whisperstorm.live.typing", qos: .userInteractive)
     private var desired = ""
+    private var maxDelete = FieldSync.maxCorrection
     private var posting = false
     private var pumpScheduled = false
     private var lastBurstEnd = Date.distantPast
@@ -46,7 +47,7 @@ final class LiveFieldTyper {
 
     var isIdle: Bool {
         var probe = sync
-        return !posting && !pumpScheduled && (probe.isLocked || probe.plan(toward: desired) == nil)
+        return !posting && !pumpScheduled && (probe.isLocked || probe.plan(toward: desired, maxDelete: maxDelete) == nil)
     }
 
     func lock(_ reason: FieldSync.Lock) {
@@ -75,8 +76,10 @@ final class LiveFieldTyper {
     }
 
     /// The field should show `text`; posts the difference as soon as it is safe.
-    func update(to text: String) {
+    /// `isFinal`: the whole-recording result, which may rewrite everything typed.
+    func update(to text: String, isFinal: Bool = false) {
         desired = text
+        maxDelete = isFinal ? FieldSync.maxRemoval : FieldSync.maxCorrection
         pump()
     }
 
@@ -98,7 +101,7 @@ final class LiveFieldTyper {
     private func pump(removal: Bool = false) {
         guard !posting, !sync.isLocked else { return }
         var plannedSync = sync
-        let planned = removal ? sync.removalPlan() : plannedSync.plan(toward: desired)
+        let planned = removal ? sync.removalPlan() : plannedSync.plan(toward: desired, maxDelete: maxDelete)
         if plannedSync.isLocked, let reason = plannedSync.lock { return lock(reason) }
         guard let edit = planned else { return }
 

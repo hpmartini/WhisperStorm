@@ -71,11 +71,12 @@ Two modes, chosen in Settings > General > Dictation. **Live** is the default on 
 #### 2a. Live (type while speaking)
 
 - Apple's on-device `SpeechTranscriber` recognizes while recording. Confirmed words are typed into the field of the window that was in front at the hotkey, as Unicode key events (never Return). Provisional words appear only in the overlay status line.
-- Whisper transcribes the audio in chunks cut at pauses (≥ 3 s, pause 0.6 s, at most 30 s; `SpeechChunker`). Its text replaces the live words whose middle lies inside the chunk (`LiveText`). The field is corrected with Backspace back to the first differing character plus retyping (`FieldSync`); at most 600 characters, i.e. the last section.
+- During the recording (preview): Whisper transcribes the audio in chunks cut at pauses (≥ 3 s, pause 0.6 s, at most 30 s; `SpeechChunker`). Its text replaces the live words whose middle lies inside the chunk or in the gap since the previous chunk (`LiveText`). The field is corrected with Backspace back to the first differing character plus retyping (`FieldSync`); at most 600 characters, i.e. the last section.
+- At the stop (final): one Whisper pass over the whole recording — the same call as the classic mode, so the final text has classic quality. It replaces the preview in the field (may rewrite everything typed, up to 3000 characters) and is the clipboard's final entry. If it yields nothing, the live text stays.
 - The field is changed only while it is still ours. It locks for the rest of the recording when: the user types or clicks after live typing started (seen by the key tap; our own events are tagged; pointer moves, scrolling, modifiers and the dictation shortcuts never count; input before the first typed character is fine, e.g. a click to place the cursor), another app or window comes to the front, Secure Keyboard Entry turns on, a correction would reach further back, or a native text view shows other text before the cursor than we typed (autocorrect).
 - At the end: field in sync → done. Locked before anything was typed → the final text is pasted like the classic mode. Locked after typing → field stays as is, the full transcript is on the clipboard, the overlay shows "Rest in clipboard — press ⌘V" for 3 s and a notification says why.
 - The clipboard follows the confirmed transcript. Intermediate states carry `org.nspasteboard.TransientType`, so clipboard history apps skip them; only the final transcript is a normal entry.
-- A failed Whisper chunk never loses the recording: the whole recording is transcribed once at the end and becomes the final text. If live typing cannot post events at all, the final text is pasted with Cmd+V.
+- If live typing cannot post events at all, the final text is pasted with Cmd+V.
 - File log: `LIVE …` lines, including `lag word→field` (p50/p90/max) per recording.
 
 #### 2b. When recording stops (classic)

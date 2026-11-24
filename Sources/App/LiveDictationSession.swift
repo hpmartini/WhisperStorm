@@ -2,14 +2,15 @@ import AppKit
 import Foundation
 import WhisperStormTranscription
 
-/// One live dictation. Apple's SpeechTranscriber confirms words while the
-/// user speaks; Whisper re-transcribes the audio in chunks (cut at pauses,
-/// at most 30 s) and its text replaces the live words of each chunk
-/// (`LiveText`). Field and clipboard follow the confirmed text; provisional
-/// words only reach the overlay.
+/// One live dictation. While the user speaks, Apple's SpeechTranscriber
+/// confirms words and Whisper re-transcribes the audio in chunks (cut at
+/// pauses, at most 30 s) whose text replaces the live words of each chunk
+/// (`LiveText`). Field and clipboard follow that preview; provisional words
+/// only reach the overlay.
 ///
-/// A failure of the live path never loses the recording: when a Whisper
-/// chunk fails, `finish` transcribes the whole recording once at the end.
+/// The final transcript is always one Whisper pass over the whole recording
+/// (classic-mode quality); it replaces the preview in the field. A failure
+/// of the live path therefore never costs the recording.
 @MainActor
 final class LiveDictationSession {
     struct Outcome {
@@ -32,8 +33,10 @@ final class LiveDictationSession {
 
     private var text = LiveText()
     private var lastConfirmed = ""
-    private var whisperFailed = false
     private var cancelled = false
+    /// Recording stopped: the whole-recording pass decides the field; late
+    /// chunk and live results only update the overlay.
+    private var finishing = false
     private let chunkSink: AsyncStream<SpeechChunk>.Continuation
     private var worker: Task<Void, Never>?
     private var recognizer: AnyObject?
@@ -60,7 +63,7 @@ final class LiveDictationSession {
             for await chunk in chunks {
                 guard let self, !cancelled else { return }
                 let whisper = await transcribe(chunk)
-                guard !cancelled else { return }
+                guard !cancelled, !finishing else { return }
                 if let whisper {
                     text.replace(chunk.range, with: whisper)
                     refresh()
@@ -91,27 +94,35 @@ final class LiveDictationSession {
         }
     }
 
-    /// Stops the recording's live work and returns the final transcript;
-    /// field and clipboard show it by then.
+    /// Stops the live preview and returns the final transcript: one Whisper
+    /// pass over the whole recording, exactly what the classic mode produces
+    /// (chunks give Whisper too little context, and words at a cut can come
+    /// out twice). The live text is only the fallback when that pass yields
+    /// nothing. Field and clipboard show the result by then.
     func finish(samples: [Float]) async -> Outcome {
-        if let last = feeder.flush() { chunkSink.yield(last) }
+        _ = feeder.flush()
+        finishing = true
         chunkSink.finish()
+        worker?.cancel()
+        async let whole = transcribeWhole(samples)
         await recognizerStart?.value
         if #available(macOS 26, *), let recognizer = recognizer as? LiveSpeechRecognizer {
             await recognizer.finish()
             // Results hop to the main queue; let those already queued land.
             await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
         }
-        await worker?.value
-
-        var final = Self.joined(text.confirmedText, text.provisionalText)
-        if whisperFailed {
-            FileLog.write("LIVE a Whisper chunk failed: transcribing the whole recording")
-            if let whole = await transcribeWhole(samples) { final = whole }
+        let live = Self.joined(text.confirmedText, text.provisionalText)
+        let final: String
+        if let whole = await whole, !whole.isEmpty {
+            final = whole
+        } else {
+            FileLog.write("LIVE final pass gave no text: keeping the live text")
+            final = live
         }
+        FileLog.write("LIVE final pass chars=\(final.count) (live preview chars=\(live.count))")
         onLiveLine("")
         if let typer {
-            typer.update(to: final)
+            typer.update(to: final, isFinal: true)
             await typer.settle()
         }
         if !final.isEmpty { clipboard.writeFinal(final) }
@@ -169,7 +180,7 @@ final class LiveDictationSession {
 
     private func refresh() {
         let confirmed = text.confirmedText
-        if confirmed != lastConfirmed {
+        if confirmed != lastConfirmed, !finishing {
             lastConfirmed = confirmed
             if !confirmed.isEmpty { clipboard.writeTransient(confirmed) }
             typer?.update(to: confirmed)
@@ -189,17 +200,17 @@ final class LiveDictationSession {
             return nil
         } catch {
             FileLog.write("LIVE whisper chunk at \(String(format: "%.1f", chunk.start))s failed: \(error.localizedDescription)")
-            whisperFailed = true
             return nil
         }
     }
 
     private func transcribeWhole(_ samples: [Float]) async -> String? {
         do {
+            try await provider.prepare()
             let whole = try await provider.transcribe(TranscriptionRequest(samples: samples, languageCode: languageCode))
             return whole.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         } catch {
-            FileLog.write("LIVE whole-recording fallback failed: \(error.localizedDescription)")
+            FileLog.write("LIVE final pass failed: \(error.localizedDescription)")
             return nil
         }
     }
