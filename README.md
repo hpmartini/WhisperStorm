@@ -13,7 +13,8 @@ WhisperStorm is a native menu-bar app. No cloud, no account, no telemetry: audio
 - **Global hotkey** — toggle (press, speak, press) or push-to-talk (hold, speak, release). Default ⌥ Space.
 - **100 % on-device** — [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift) on CoreML / Apple Silicon, or any OpenAI-compatible local server.
 - **German and English** — auto-detect or fixed.
-- **Pastes where you type** — result goes to the clipboard and into the focused text field.
+- **Live dictation** (macOS 26) — words appear in the focused text field while you speak; Whisper then corrects the last section. The clipboard always holds the full text.
+- **Pastes where you type** — or, in *When recording stops* mode, the result goes to the clipboard and into the focused text field at the end.
 - **Live waveform overlay** — non-activating, never steals focus from your app.
 - **Microphone picker**, launch at login, Esc to cancel.
 
@@ -71,8 +72,9 @@ Models live in `~/Library/Application Support/WhisperStorm/models`. After a down
 
 - **Toggle** (default **⌥ Space**): press to record, press again to stop and transcribe.
 - **Push to talk** (unbound by default): hold while speaking, release to transcribe. With *Tap push-to-talk shortcut to toggle*, a short tap (< 0.3 s) starts recording and the next tap stops it.
-- **Esc** while recording cancels — nothing is inserted, the clipboard is untouched. The key press is swallowed, so the app in front never sees it (a running agent in a terminal keeps running). Outside a recording Esc is left alone.
-- The text stays on the clipboard after pasting. If nothing has keyboard focus you get a "Copied to clipboard" notification.
+- **Live** (default on macOS 26, Settings → General → *Dictation*): confirmed words are typed into the window that was in front when you started; the overlay shows the words still being recognized. Whisper re-transcribes each pause-delimited section and replaces it in the field. If you type, click or switch windows during the recording, WhisperStorm stops typing and the full transcript is on the clipboard (notification). Clipboard history apps (Raycast, Paste, Maccy) only get the final text.
+- **Esc** while recording cancels. The key press is swallowed, so the app in front never sees it (a running agent in a terminal keeps running). Live text already typed is removed again and the clipboard gets its previous content back. Outside a recording Esc is left alone.
+- In *When recording stops* mode the text stays on the clipboard after pasting. If nothing has keyboard focus you get a "Copied to clipboard" notification.
 
 Both shortcuts, language, overlay look and launch at login are in Settings → **General**.
 

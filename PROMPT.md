@@ -26,12 +26,13 @@ Provider-Wahl in den Settings. Fehler (Server nicht erreichbar, Modell nicht gel
 ### 1. Hotkey-Diktat
 - Konfigurierbarer globaler Shortcut (Default: ⌥ Space), funktioniert systemweit, egal welche App fokussiert ist.
 - Zwei Modi (Setting): **Toggle** (drücken = Aufnahme startet, erneut drücken = Stopp + Transkription; Default) und **Push-to-Talk** (halten = aufnehmen, loslassen = transkribieren).
-- Esc während der Aufnahme bricht ab (kein Insert, kein Clipboard-Write).
+- Esc während der Aufnahme bricht ab (kein Insert, kein Clipboard-Write). Die Esc-Taste wird dabei verschluckt und erreicht die vordere App nicht (2026-11-24).
 
 ### 2. Ergebnis-Insertion (Textfeld UND Zwischenablage)
 - Nach der Transkription wird der Text (a) in die **Zwischenablage** gelegt — und bleibt dort, kein Restore der alten Zwischenablage — und (b) automatisch ins **aktive Textfeld der fokussierten App eingefügt**: `NSPasteboard` setzen, dann Cmd+V als `CGEvent` an die frontmost App senden.
 - Das erfordert die Accessibility-Permission (siehe Onboarding). Das Overlay-Panel darf der Ziel-App dabei niemals den Fokus stehlen (non-activating, siehe unten).
 - Edge Case: kein fokussiertes Textfeld / Paste schlägt fehl → Text ist trotzdem in der Zwischenablage, kurze Notification „Copied to clipboard".
+- **Live-Diktat (2026-11-24, ersetzt v1-Non-Goal „kein Streaming-Insert“):** Standardmodus ab macOS 26. Apple SpeechTranscriber erkennt während der Aufnahme, bestätigte Wörter werden ins Feld getippt, vorläufige nur im Overlay. Whisper korrigiert abschnittsweise (Pausen, ≤ 30 s) per Rücktaste + neu tippen, nur solange der Cursor am Ende steht und niemand getippt hat; sonst nur Zwischenablage. Zwischenablage spiegelt den Gesamtstand (Zwischenstände als `org.nspasteboard.TransientType`). Esc entfernt den getippten Text wieder. Der Modus „erst am Ende“ bleibt wählbar. Briefing: `briefings/2026-11-24-whisperstorm-live-diktat.md`.
 
 ### 3. Listening-Overlay mit Cyberpunk-Waveform
 - Borderless, **non-activating** `NSPanel` (`.nonactivatingPanel`, floating window level) — klaut keinen Fokus. Position: zentriert am unteren Rand des aktiven Screens. Optik: abgerundetes Dark-Glass (ultraThinMaterial, dunkel getönt).
@@ -70,4 +71,4 @@ Am Ende:
 
 ## Non-Goals (v1)
 
-Keine Cloud-STT. Kein Streaming-Insert Wort für Wort (eingefügt wird erst nach Stopp). Keine LLM-Nachbearbeitung/Formatierung des Transkripts. Kein App-Store-Release, keine Notarisierung.
+Keine Cloud-STT. Keine LLM-Nachbearbeitung/Formatierung des Transkripts. Kein App-Store-Release, keine Notarisierung. (Streaming-Insert war v1-Non-Goal; seit 2026-11-24 Live-Diktat, siehe oben.)

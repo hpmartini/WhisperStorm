@@ -60,9 +60,24 @@ Errors (server unreachable, model not loaded, …) are never silent: they appear
 
 - Configurable global shortcut (default ⌥ Space), working in every app.
 - Two modes: **Toggle** (press to start, press again to stop and transcribe — default) and **Push-to-talk** (hold to record, release to transcribe; optional "tap to toggle" for taps shorter than 0.3 s).
-- Esc while recording cancels: nothing is inserted, the clipboard is untouched. The Esc press (and its key-up) is swallowed by an active `CGEventTap` and never reaches the frontmost app; outside a recording the tap is disabled. Needs Accessibility; without it the overlay says so.
+- Esc while recording cancels. The Esc press (and its key-up) is swallowed by an active `CGEventTap` and never reaches the frontmost app; outside a recording the tap is disabled. Needs Accessibility; without it the overlay says so.
+  - Classic mode: nothing is inserted, the clipboard is untouched.
+  - Live mode: the typed text is removed with Backspace while the field is still ours (see 2a); the clipboard gets its pre-recording content back.
 
 ### 2. Result insertion (text field and clipboard)
+
+Two modes, chosen in Settings > General > Dictation. **Live** is the default on macOS 26; older systems and socket clients (pickyNotes) always use **When recording stops**.
+
+#### 2a. Live (type while speaking)
+
+- Apple's on-device `SpeechTranscriber` recognizes while recording. Confirmed words are typed into the field of the window that was in front at the hotkey, as Unicode key events (never Return). Provisional words appear only in the overlay status line.
+- Whisper transcribes the audio in chunks cut at pauses (≥ 3 s, pause 0.6 s, at most 30 s; `SpeechChunker`). Its text replaces the live words whose middle lies inside the chunk (`LiveText`). The field is corrected with Backspace back to the first differing character plus retyping (`FieldSync`); at most 600 characters, i.e. the last section.
+- The field is changed only while it is still ours. It locks for the rest of the recording, and the clipboard alone carries the transcript, when: the user types or clicks (seen by the key tap, our own events are tagged), another app or window comes to the front, Secure Keyboard Entry turns on, a correction would reach further back, or a native text view shows other text before the cursor than we typed (autocorrect). A notification says why.
+- The clipboard follows the confirmed transcript. Intermediate states carry `org.nspasteboard.TransientType`, so clipboard history apps skip them; only the final transcript is a normal entry.
+- A failed Whisper chunk never loses the recording: the whole recording is transcribed once at the end and becomes the final text. If live typing cannot post events at all, the final text is pasted with Cmd+V.
+- File log: `LIVE …` lines, including `lag word→field` (p50/p90/max) per recording.
+
+#### 2b. When recording stops (classic)
 
 - After transcription the text is (a) written to the clipboard — and stays there, the previous contents are not restored — and (b) pasted into the focused app by setting `NSPasteboard` and posting Cmd+V as a `CGEvent`.
 - Requires the Accessibility permission. The overlay must never steal focus from the target app.
@@ -100,7 +115,7 @@ Errors (server unreachable, model not loaded, …) are never silent: they appear
 
 ## Known limitations (by design in v1)
 
-- No streaming insertion; text appears after you stop recording.
+- Live mode needs macOS 26 (`SpeechTranscriber`). In terminals and Electron apps the cursor check relies on watching the user's input only (they expose no text to Accessibility).
 - No punctuation or LLM post-processing.
 - Secure input fields (password fields, terminals with Secure Keyboard Entry) block synthetic keystrokes; the transcript stays on the clipboard.
 - Launch at Login may fail for builds run from the build folder (`SMAppService` prefers `/Applications`).

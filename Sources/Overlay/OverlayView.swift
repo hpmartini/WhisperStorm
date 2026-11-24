@@ -71,6 +71,14 @@ struct OverlayView: View {
     @ViewBuilder
     private var statusLine: some View {
         switch state.phase {
+        case .recording where state.captureNotice == nil && !state.liveLine.isEmpty:
+            // Newest words stay visible: truncate at the start.
+            Text(state.liveLine)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(CyberpunkPalette.cyan)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .padding(.horizontal, 12)
         case .recording:
             Text(state.captureNotice ?? "Listening — esc to cancel")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
