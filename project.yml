@@ -27,6 +27,7 @@ targets:
           - App/AppState.swift
           - App/RecordingKeyTap.swift
           - Insertion/FieldSync.swift
+          - Insertion/ClipboardMirror.swift
           - Audio/AudioCaptureEngine.swift
           - Audio/AudioDeviceManager.swift
           - Audio/OutputDucker.swift
