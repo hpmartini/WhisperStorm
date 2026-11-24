@@ -571,6 +571,10 @@ final class DictationCoordinator: ObservableObject {
             return
         }
         state.lastTranscript = outcome.text
+        FileLog.write(
+            "INSERT live chars=\(outcome.text.count) field=\(outcome.fieldLock.map { "locked(\($0))" } ?? "in sync") "
+            + "typed=\(outcome.typedAnything) clipboard=final"
+        )
         if outcome.fieldLock == .typingFailed, !outcome.typedAnything {
             // Unicode typing did not work at all: the classic paste path.
             _ = TextInserter.insert(outcome.text)

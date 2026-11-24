@@ -104,6 +104,8 @@ final class LiveFieldTyper {
         }
 
         sync.apply(edit)
+        // Counts only, never the text.
+        FileLog.write("LIVE field \(edit.deleteCount > 0 ? "correct" : "type") -\(edit.deleteCount) +\(edit.insert.count)")
         posting = true
         let abort = abort
         postQueue.async {
@@ -138,9 +140,10 @@ final class LiveFieldTyper {
             guard !abort.isSet else { return true }
             guard postKey(CGKeyCode(kVK_Delete), text: nil, source: source) else { return false }
         }
-        for piece in pieces(of: edit.insert) {
+        // One character per event: some apps read only the first character of a multi-character Unicode event.
+        for character in edit.insert {
             guard !abort.isSet else { return true }
-            guard postKey(0, text: piece, source: source) else { return false }
+            guard postKey(0, text: Array(String(character).utf16), source: source) else { return false }
         }
         return true
     }
@@ -159,22 +162,6 @@ final class LiveFieldTyper {
         up.post(tap: .cghidEventTap)
         usleep(eventGap)
         return true
-    }
-
-    /// Unicode key events carry at most 20 UTF-16 units; never split a character.
-    nonisolated static func pieces(of text: String) -> [[UniChar]] {
-        var out: [[UniChar]] = []
-        var current: [UniChar] = []
-        for character in text {
-            let units = Array(String(character).utf16)
-            if current.count + units.count > 20, !current.isEmpty {
-                out.append(current)
-                current = []
-            }
-            current += units
-        }
-        if !current.isEmpty { out.append(current) }
-        return out
     }
 
     // MARK: - Accessibility
