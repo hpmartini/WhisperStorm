@@ -1,5 +1,30 @@
 # TASK.md — Issue Log
 
+## 2026-11-24 — Hotkey dictation transcribes but never pastes
+
+### Issue
+After Esc-fix test runs, every hotkey dictation logged `TRANSCRIBED chars=…`
+but no `INSERT …`: nothing reached the text field or the clipboard.
+
+### Root cause
+Not the Esc tap. A test started a recording over the control socket
+(`{"cmd":"start"}` sets `deliveryMode = .socket`) and cancelled it with Esc
+without a socket `stop`. Only `stop` reset the mode, so it stayed `.socket`,
+and `runTranscription` skips `TextInserter.insert` for socket delivery —
+silently. Known as a `shortcut:` note in `ControlSocketServer` ("a client that
+starts and never stops leaves socket delivery on"); main has the same defect.
+
+### Fix
+- `startDictation(delivery:)`: every recording that actually starts sets the
+  delivery mode (socket `.socket`, hotkey/menu `.hotkey`), so a stale socket
+  recording can no longer switch off pasting.
+- `START … delivery=…` and `-> socket delivery: … not pasted` are logged.
+
+### Note
+`ESC tap: disabled by system (user input)` after each STOP was the tap's echo
+of its own disable, harmless; it is no longer logged unless the tap is still
+needed.
+
 ## 2026-11-24 — Esc cancels the recording and also aborts the agent in front
 
 ### Issue
