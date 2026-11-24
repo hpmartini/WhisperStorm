@@ -521,7 +521,9 @@ final class DictationCoordinator: ObservableObject {
         let wanted: Locale = switch settings.language {
         case .german: Locale(identifier: "de_DE")
         case .english: Locale(identifier: "en_US")
-        case .auto: Locale.current
+        // Not `Locale.current`: the app ships only an English localization, so
+        // that resolves to English even for a German user.
+        case .auto: Locale(identifier: Locale.preferredLanguages.first ?? "de-DE")
         }
         liveLocalePreparation = Task {
             var locale = await LiveSpeechRecognizer.prepare(locale: wanted) { FileLog.write($0) }
