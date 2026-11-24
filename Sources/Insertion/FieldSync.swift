@@ -66,13 +66,15 @@ struct FieldSync: Equatable {
 
     /// The edit from `delivered` to `desired`: delete back to the first
     /// differing character, then type the rest. Nil when locked or nothing
-    /// changes; locks when the deletion would reach too far back.
-    mutating func plan(toward desired: String) -> Edit? {
+    /// changes; locks when the deletion would exceed `maxDelete` (default:
+    /// the last section; the final whole-recording pass may rewrite up to
+    /// `maxRemoval`).
+    mutating func plan(toward desired: String, maxDelete: Int = maxCorrection) -> Edit? {
         guard lock == nil else { return nil }
         let common = delivered.commonPrefix(with: desired).count
         let edit = Edit(deleteCount: delivered.count - common, insert: String(desired.dropFirst(common)))
         guard edit.deleteCount > 0 || !edit.insert.isEmpty else { return nil }
-        guard edit.deleteCount <= Self.maxCorrection else {
+        guard edit.deleteCount <= maxDelete else {
             lock(.correctionTooLarge)
             return nil
         }

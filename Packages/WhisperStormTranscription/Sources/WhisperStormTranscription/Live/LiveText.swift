@@ -26,6 +26,8 @@ public struct LiveText: Sendable {
     private var live: [[LiveWord]] = []
     private var provisional: [LiveWord] = []
     private var replaced: [Range<TimeInterval>] = []
+    /// End of the audio Whisper has covered so far (chunks arrive in time order).
+    private var coveredEnd: TimeInterval = 0
 
     public init() {}
 
@@ -41,16 +43,21 @@ public struct LiveText: Sendable {
         provisional = words.filter { !isReplaced($0) }
     }
 
-    /// Whisper's text for `range` takes the place of the live words in that range.
+    /// Whisper's text for `range` takes the place of the live words in that range. Chunks arrive in time order; the
+    /// stretch since the previous chunk's end (silence the chunker dropped before this chunk) is covered too, so a
+    /// live word there never stays next to Whisper's text — Whisper often puts a word spoken across the cut into the
+    /// previous chunk.
     public mutating func replace(_ range: Range<TimeInterval>, with text: String) {
         let text = Self.collapse(text)
         if !text.isEmpty { whisper.append((range.lowerBound, text)) }
-        replaced.append(range)
+        let covered = min(range.lowerBound, coveredEnd)..<max(range.upperBound, coveredEnd)
+        coveredEnd = covered.upperBound
+        replaced.append(covered)
         live = live.compactMap { words in
-            let rest = words.filter { !range.contains($0.middle) }
+            let rest = words.filter { !covered.contains($0.middle) }
             return rest.isEmpty ? nil : rest
         }
-        provisional.removeAll { range.contains($0.middle) }
+        provisional.removeAll { covered.contains($0.middle) }
     }
 
     /// Never contains "\n": it gets typed into terminals and chats where Return submits.

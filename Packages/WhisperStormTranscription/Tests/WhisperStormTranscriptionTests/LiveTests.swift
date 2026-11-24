@@ -92,4 +92,23 @@ final class LiveTextTests: XCTestCase {
         t.confirm([w(5, "?")], through: 6)
         XCTAssertEqual(t.confirmedText, "Ja sehr schön")
     }
+
+    // Regression 2026-11-24 19:59:51Z: "Sollte eigentlich schon langsamer fertig sein. sein." — Whisper put the
+    // word spoken across the 3.0 s cut into chunk 1; the chunker dropped the silence after it, so chunk 2 started at
+    // 3.72 s and the live "sein." (3.1–3.5 s) lay in no chunk range and stayed next to Whisper's "sein.".
+    func testLiveWordInTheGapBetweenChunksDoesNotSurviveNextToWhisper() {
+        var t = LiveText()
+        t.confirm([w(0.1, "Sollte"), w(0.6, " eigentlich"), w(1.2, " schon"), w(1.7, " langsam"), w(2.3, " fertig")], through: 2.8)
+        t.replace(0..<3.0, with: "Sollte eigentlich schon langsamer fertig sein.")
+        t.confirm([LiveWord(start: 3.1, end: 3.5, text: " sein.")], through: 3.6)
+        t.replace(3.72..<4.43, with: "")
+        XCTAssertEqual(t.confirmedText, "Sollte eigentlich schon langsamer fertig sein.")
+    }
+
+    func testLiveWordsAfterTheLastChunkStay() {
+        var t = LiveText()
+        t.replace(0..<3.0, with: "Erster Satz.")
+        t.confirm([w(3.5, " Zweiter"), w(4.0, " Satz.")], through: 4.5)
+        XCTAssertEqual(t.confirmedText, "Erster Satz. Zweiter Satz.")
+    }
 }

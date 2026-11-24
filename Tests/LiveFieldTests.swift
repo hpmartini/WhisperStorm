@@ -64,6 +64,19 @@ final class FieldSyncTests: XCTestCase {
         XCTAssertFalse(sync.isLocked)
     }
 
+    func testFinalWholeRecordingPassMayRewriteTheWholePreview() {
+        // The final pass differs from the chunked preview early on; it must still reach the field.
+        var sync = FieldSync()
+        let preview = "Sollte eigentlich schon langsam fertig sein. sein. " + String(repeating: "weiter ", count: 150)
+        sync.apply(sync.plan(toward: preview)!)
+        let final = "Sollte eigentlich schon längst fertig sein. " + String(repeating: "weiter ", count: 150)
+        let edit = sync.plan(toward: final, maxDelete: FieldSync.maxRemoval)
+        XCTAssertEqual(edit?.deleteCount, preview.count - "Sollte eigentlich schon l".count)
+        XCTAssertFalse(sync.isLocked)
+        sync.apply(edit!)
+        XCTAssertEqual(sync.delivered, final)
+    }
+
     func testEscRemovesEverythingTyped() {
         var sync = FieldSync()
         sync.apply(sync.plan(toward: "Diktat")!)
