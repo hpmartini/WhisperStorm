@@ -12,9 +12,10 @@ import KeyboardShortcuts
 final class DictationCoordinator: ObservableObject {
     static let shared = DictationCoordinator()
 
-    /// How a dictation result is delivered. The hotkey path uses `.hotkey` (pastes via CGEvent + Accessibility);
+    /// How a dictation result is delivered. Hotkey and menu recordings use `.hotkey` (pastes via CGEvent + Accessibility);
     /// the Unix-socket control server uses `.socket` so the caller (pickyNotes) can read the transcript over
-    /// the wire instead of pasting it twice.
+    /// the wire instead of pasting it twice. Set by every recording that actually starts, so a socket recording
+    /// that never got its stop (cancelled with Esc, client gone) cannot turn off pasting for later hotkey dictations.
     enum DeliveryMode { case hotkey, socket }
     var deliveryMode: DeliveryMode = .hotkey
 
@@ -34,8 +35,9 @@ final class DictationCoordinator: ObservableObject {
     private var overlayController: OverlayPanelController?
     private let onboardingController = OnboardingWindowController()
 
-    private var escGlobalMonitor: Any?
-    private var escLocalMonitor: Any?
+    private lazy var escapeTap = EscapeKeyTap { [weak self] in
+        MainActor.assumeIsolated { self?.cancelDictation() }
+    }
     private var idleResetTask: Task<Void, Never>?
     private var transcriptionTask: Task<Void, Never>?
     private var pttKeyIsDown = false
@@ -133,7 +135,7 @@ final class DictationCoordinator: ObservableObject {
             pttKeyIsDown = true
             pttKeyDownAt = Date()
             Task {
-                await self.startDictation()
+                await self.startDictation(delivery: .hotkey)
                 // The key may already be released by the time the audio
                 // engine is running — stop right away unless a tap latched it.
                 if !self.pttKeyIsDown, !self.pttLatched {
@@ -201,15 +203,15 @@ final class DictationCoordinator: ObservableObject {
             if isStarting {
                 stopDictation()
             } else {
-                Task { await startDictation() }
+                Task { await startDictation(delivery: .hotkey) }
             }
         case .transcribing:
             break
         }
     }
 
-    func startDictation() async {
-        FileLog.write("START requested, phase=\(state.phase)")
+    func startDictation(delivery: DeliveryMode) async {
+        FileLog.write("START requested, phase=\(state.phase) delivery=\(delivery)")
         switch state.phase {
         case .recording, .transcribing:
             FileLog.write("  -> ignored: already \(state.phase)")
@@ -223,6 +225,7 @@ final class DictationCoordinator: ObservableObject {
         }
         isStarting = true
         stopAfterStart = false
+        deliveryMode = delivery
         defer { isStarting = false }
         guard await AudioCaptureEngine.requestMicrophoneAccess() else {
             FileLog.write("  -> microphone access denied")
@@ -239,7 +242,7 @@ final class DictationCoordinator: ObservableObject {
             try await captureEngine.start(deviceID: device?.id)
             idleResetTask?.cancel()
             state.phase = .recording
-            installEscMonitors()
+            armEscapeTap()
             Log.app.info("Recording started")
             FileLog.write(
                 "  -> recording from \(activeDeviceLabel) "
@@ -277,7 +280,7 @@ final class DictationCoordinator: ObservableObject {
             FileLog.write("STOP ignored, phase=\(state.phase)")
             return
         }
-        removeEscMonitors()
+        escapeTap.disarm()
         let samples = captureEngine.stop()
         let duration = Double(samples.count) / AudioCaptureEngine.targetSampleRate
         Log.app.info("Recording stopped: \(samples.count) samples (\(duration, format: .fixed(precision: 2)) s)")
@@ -322,9 +325,10 @@ final class DictationCoordinator: ObservableObject {
     /// Esc during recording: discard everything — no insert, no clipboard write.
     func cancelDictation() {
         guard state.phase == .recording else { return }
-        removeEscMonitors()
+        escapeTap.disarm()
         captureEngine.cancel()
         state.phase = .idle
+        FileLog.write("CANCEL recording discarded")
         Log.app.info("Recording cancelled")
     }
 
@@ -371,6 +375,7 @@ final class DictationCoordinator: ObservableObject {
                 }
             } else {
                 // Socket delivery: the caller reads the transcript over the wire.
+                FileLog.write("  -> socket delivery: transcript returned to the client, not pasted")
                 state.phase = .success
             }
             scheduleReturnToIdle(after: 0.8)
@@ -420,29 +425,14 @@ final class DictationCoordinator: ObservableObject {
         pasteboard.setString(state.lastTranscript, forType: .string)
     }
 
-    // MARK: - Esc monitoring (only active while recording)
+    // MARK: - Esc (swallowed only while recording)
 
-    private func installEscMonitors() {
-        removeEscMonitors()
-        escGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53 else { return }
-            Task { @MainActor in self?.cancelDictation() }
-        }
-        escLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53 else { return event }
-            self?.cancelDictation()
-            return nil
-        }
-    }
-
-    private func removeEscMonitors() {
-        if let escGlobalMonitor {
-            NSEvent.removeMonitor(escGlobalMonitor)
-            self.escGlobalMonitor = nil
-        }
-        if let escLocalMonitor {
-            NSEvent.removeMonitor(escLocalMonitor)
-            self.escLocalMonitor = nil
+    private func armEscapeTap() {
+        guard !escapeTap.arm() else { return }
+        // Without the tap Esc neither cancels nor gets swallowed; say so
+        // unless a microphone warning already occupies the status line.
+        if state.captureNotice == nil {
+            state.captureNotice = "Esc cancel off — grant Accessibility"
         }
     }
 
@@ -496,7 +486,7 @@ final class DictationCoordinator: ObservableObject {
             try captureEngine.switchDevice(to: nil)
         } catch {
             captureEngine.cancel()
-            removeEscMonitors()
+            escapeTap.disarm()
             reportError("Recording stopped: \(error.localizedDescription)")
         }
     }
@@ -512,7 +502,7 @@ final class DictationCoordinator: ObservableObject {
             try captureEngine.switchDevice(to: deviceID)
         } catch {
             captureEngine.cancel()
-            removeEscMonitors()
+            escapeTap.disarm()
             reportError("Recording stopped: \(error.localizedDescription)")
         }
     }

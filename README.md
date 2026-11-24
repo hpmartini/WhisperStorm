@@ -71,7 +71,7 @@ Models live in `~/Library/Application Support/WhisperStorm/models`. After a down
 
 - **Toggle** (default **⌥ Space**): press to record, press again to stop and transcribe.
 - **Push to talk** (unbound by default): hold while speaking, release to transcribe. With *Tap push-to-talk shortcut to toggle*, a short tap (< 0.3 s) starts recording and the next tap stops it.
-- **Esc** while recording cancels — nothing is inserted, the clipboard is untouched.
+- **Esc** while recording cancels — nothing is inserted, the clipboard is untouched. The key press is swallowed, so the app in front never sees it (a running agent in a terminal keeps running). Outside a recording Esc is left alone.
 - The text stays on the clipboard after pasting. If nothing has keyboard focus you get a "Copied to clipboard" notification.
 
 Both shortcuts, language, overlay look and launch at login are in Settings → **General**.

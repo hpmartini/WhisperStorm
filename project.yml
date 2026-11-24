@@ -25,6 +25,7 @@ targets:
         includes:
           - App/FileTranscription.swift
           - App/AppState.swift
+          - App/EscapeKeyTap.swift
           - Audio/AudioCaptureEngine.swift
           - Audio/AudioDeviceManager.swift
           - Audio/OutputDucker.swift

@@ -174,19 +174,18 @@ final class ControlSocketServer {
         ["ok": true, "phase": phaseString(coord.state.phase), "text": NSNull()]
     }
 
-    /// Socket delivery stays on from here until stopReply sees success or error, so the transcript is returned instead of pasted.
-    /// Awaits `startDictation()` itself (microphone prompt included, bounded at 30 s) on the socket worker thread, then reads the phase:
+    /// A recording started here delivers over the socket (the transcript is returned instead of pasted); the next recording
+    /// started by hotkey or menu delivers by paste again, whether or not this one got its stop.
+    /// Awaits `startDictation(delivery: .socket)` itself (microphone prompt included, bounded at 30 s) on the socket worker thread, then reads the phase:
     /// ok only on .recording, otherwise the error text. If the wait gives up, the start is abandoned: a recording that begins
     /// afterwards is cancelled, so no late recording is left behind.
-    /// shortcut: a client that starts and never stops leaves socket delivery on (hotkey dictation then does not paste) until its next stop; upgrade with a watchdog if clients get flaky.
     private nonisolated func startReply() -> [String: Any] {
         let done = DispatchSemaphore(value: 0)
         let abandoned = AbandonFlag()
         DispatchQueue.main.sync {
             let coord = DictationCoordinator.shared
-            if coord.state.phase != .recording && coord.state.phase != .transcribing { coord.deliveryMode = .socket }
             Task { @MainActor in
-                await coord.startDictation()
+                await coord.startDictation(delivery: .socket)
                 if abandoned.isSet, coord.state.phase == .recording { coord.cancelDictation() }
                 done.signal()
             }

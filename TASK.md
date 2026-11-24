@@ -1,5 +1,61 @@
 # TASK.md — Issue Log
 
+## 2026-11-24 — Hotkey dictation transcribes but never pastes
+
+### Issue
+After Esc-fix test runs, every hotkey dictation logged `TRANSCRIBED chars=…`
+but no `INSERT …`: nothing reached the text field or the clipboard.
+
+### Root cause
+Not the Esc tap. A test started a recording over the control socket
+(`{"cmd":"start"}` sets `deliveryMode = .socket`) and cancelled it with Esc
+without a socket `stop`. Only `stop` reset the mode, so it stayed `.socket`,
+and `runTranscription` skips `TextInserter.insert` for socket delivery —
+silently. Known as a `shortcut:` note in `ControlSocketServer` ("a client that
+starts and never stops leaves socket delivery on"); main has the same defect.
+
+### Fix
+- `startDictation(delivery:)`: every recording that actually starts sets the
+  delivery mode (socket `.socket`, hotkey/menu `.hotkey`), so a stale socket
+  recording can no longer switch off pasting.
+- `START … delivery=…` and `-> socket delivery: … not pasted` are logged.
+
+### Note
+`ESC tap: disabled by system (user input)` after each STOP was the tap's echo
+of its own disable, harmless; it is no longer logged unless the tap is still
+needed.
+
+## 2026-11-24 — Esc cancels the recording and also aborts the agent in front
+
+### Issue
+Esc during a recording cancelled it, but the same press reached the frontmost
+app. In a terminal or agent chat with a running agent, that aborted the agent.
+
+### Root cause
+Esc was watched with `NSEvent.addGlobalMonitorForEvents`. Global monitors only
+observe; they cannot consume an event. Reproduced on main (290be4d): a key
+reader in Terminal logged `\x1b` for the Esc pressed during a recording.
+
+### Fix
+- `EscapeKeyTap`: an active `CGEventTap` (session level, head insert) enabled
+  only while recording. It swallows the Esc key-down, its auto-repeats and
+  its key-up; ⌘/⌥/⌃+Esc pass (Force Quit). Rules live in `EscapeKeyFilter`
+  (unit-tested).
+- The tap runs on its own thread: `captureEngine.start` can block the main
+  actor for seconds, and a tap on a blocked run loop lags every keystroke.
+- Without Accessibility the tap cannot be created; the overlay shows
+  "Esc cancel off — grant Accessibility" instead of "Listening".
+
+### Verification
+A listen-only tap appended after ours logged which Esc events still reach
+apps: the press outside the recording and both presses after it passed, the
+press during the recording did not (`ESC swallowed during recording`,
+`CANCEL recording discarded` in the file log).
+
+### Limit
+Secure Keyboard Entry hides keys from every event tap: there Esc reaches the
+app and does not cancel (same as before).
+
 ## 2026-10-14 — Overlay "blur" setting only darkens, never blurs
 
 ### Issue
