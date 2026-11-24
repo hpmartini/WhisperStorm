@@ -40,6 +40,22 @@ enum TranscriptionProviderKind: String, CaseIterable, Identifiable {
     }
 }
 
+enum DictationMode: String, CaseIterable, Identifiable {
+    /// Text appears in the field while speaking; Whisper corrects it.
+    case live
+    /// Transcribe once when the recording stops, then paste.
+    case atEnd
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .live: "Live (type while speaking)"
+        case .atEnd: "When recording stops"
+        }
+    }
+}
+
 /// UserDefaults-backed app settings shared across the whole app.
 @MainActor
 final class AppSettings: ObservableObject {
@@ -58,6 +74,7 @@ final class AppSettings: ObservableObject {
         static let overlayBlurRadius = "overlayBlurRadius"
         static let overlayLiquidGlass = "overlayLiquidGlass"
         static let duckOutputWhileRecording = "duckOutputWhileRecording"
+        static let dictationMode = "dictationMode"
     }
 
     nonisolated static let defaultWhisperKitModel = "openai_whisper-small"
@@ -77,6 +94,11 @@ final class AppSettings: ObservableObject {
 
     @Published var providerKind: TranscriptionProviderKind {
         didSet { defaults.set(providerKind.rawValue, forKey: Keys.providerKind) }
+    }
+
+    /// Live needs macOS 26 (SpeechTranscriber); older systems behave as `.atEnd`.
+    @Published var dictationMode: DictationMode {
+        didSet { defaults.set(dictationMode.rawValue, forKey: Keys.dictationMode) }
     }
 
     /// WhisperKit model variant name as it appears in the HuggingFace repo.
@@ -133,6 +155,8 @@ final class AppSettings: ObservableObject {
         pushToTalkTapToggles = defaults.bool(forKey: Keys.pushToTalkTapToggles)
         language = defaults.string(forKey: Keys.language)
             .flatMap(TranscriptionLanguage.init(rawValue:)) ?? .auto
+        dictationMode = defaults.string(forKey: Keys.dictationMode)
+            .flatMap(DictationMode.init(rawValue:)) ?? .live
         providerKind = defaults.string(forKey: Keys.providerKind)
             .flatMap(TranscriptionProviderKind.init(rawValue:)) ?? .whisperKit
         whisperKitModel = defaults.string(forKey: Keys.whisperKitModel) ?? Self.defaultWhisperKitModel

@@ -82,6 +82,10 @@ final class AudioCaptureEngine {
     /// mid-capture (e.g. the input device disappeared).
     var onConfigurationChange: (() -> Void)?
 
+    /// Called on the capture queue with each new block of 16 kHz samples and
+    /// the index of its first sample since the recording started (live dictation).
+    var onSamples: (([Float], Int) -> Void)?
+
     private var observers: [NSObjectProtocol] = []
 
     init(levelStore: AudioLevelStore) {
@@ -314,10 +318,13 @@ final class AudioCaptureEngine {
 
         let frameCount = Int(outBuffer.frameLength)
         guard frameCount > 0, let outChannel = outBuffer.floatChannelData?[0] else { return }
-        bufferLock.withLock {
-            guard capturing else { return }
-            samples.append(contentsOf: UnsafeBufferPointer(start: outChannel, count: frameCount))
+        let block = Array(UnsafeBufferPointer(start: outChannel, count: frameCount))
+        let offset: Int? = bufferLock.withLock {
+            guard capturing else { return nil }
+            defer { samples.append(contentsOf: block) }
+            return samples.count
         }
+        if let offset { onSamples?(block, offset) }
     }
 
     private func updateLevel(rms: Float) {

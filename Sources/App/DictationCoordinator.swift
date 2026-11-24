@@ -35,9 +35,16 @@ final class DictationCoordinator: ObservableObject {
     private var overlayController: OverlayPanelController?
     private let onboardingController = OnboardingWindowController()
 
-    private lazy var escapeTap = EscapeKeyTap { [weak self] in
-        MainActor.assumeIsolated { self?.cancelDictation() }
-    }
+    private lazy var keyTap = RecordingKeyTap(
+        onEscape: { [weak self] in MainActor.assumeIsolated { self?.cancelDictation() } },
+        onUserInput: { [liveSlot] in liveSlot.userInput() }
+    )
+    /// Off-main entry points (capture queue, key tap thread) of the live session.
+    private let liveSlot = LiveSessionSlot()
+    private var liveSession: LiveDictationSession?
+    /// SpeechTranscriber locale with its model installed; nil until prepared or unsupported.
+    private var liveLocale: Locale?
+    private var liveLocalePreparation: Task<Void, Never>?
     private var idleResetTask: Task<Void, Never>?
     private var transcriptionTask: Task<Void, Never>?
     private var pttKeyIsDown = false
@@ -66,6 +73,9 @@ final class DictationCoordinator: ObservableObject {
         captureEngine.onConfigurationChange = { [weak self] in
             self?.handleAudioConfigurationChange()
         }
+        captureEngine.onSamples = { [liveSlot] samples, offset in
+            liveSlot.feed(samples, at: offset)
+        }
         deviceManager.onDevicesChanged = { [weak self] in
             self?.handleDeviceListChange()
         }
@@ -77,6 +87,7 @@ final class DictationCoordinator: ObservableObject {
         setUpHotkey()
         setUpModelWarmUp()
         setUpOutputDucking()
+        setUpLiveRecognizer()
     }
 
     private func setUpOutputDucking() {
@@ -237,12 +248,20 @@ final class DictationCoordinator: ObservableObject {
             activeDeviceLabel = device?.name
                 ?? deviceManager.defaultInputDevice?.name
                 ?? "the system default input"
+            // Before capture starts: the target is the app in front at the
+            // hotkey, and the first audio must reach the session.
+            let live = await makeLiveSession()
             let startedAt = Date()
             defer { lastStartDuration = Date().timeIntervalSince(startedAt) }
-            try await captureEngine.start(deviceID: device?.id)
+            do {
+                try await captureEngine.start(deviceID: device?.id)
+            } catch {
+                if let live { abandonLiveSession(live) }
+                throw error
+            }
             idleResetTask?.cancel()
             state.phase = .recording
-            armEscapeTap()
+            startKeyTap(watchInput: live != nil)
             Log.app.info("Recording started")
             FileLog.write(
                 "  -> recording from \(activeDeviceLabel) "
@@ -280,7 +299,7 @@ final class DictationCoordinator: ObservableObject {
             FileLog.write("STOP ignored, phase=\(state.phase)")
             return
         }
-        escapeTap.disarm()
+        keyTap.stopEscape()
         let samples = captureEngine.stop()
         let duration = Double(samples.count) / AudioCaptureEngine.targetSampleRate
         Log.app.info("Recording stopped: \(samples.count) samples (\(duration, format: .fixed(precision: 2)) s)")
@@ -293,6 +312,7 @@ final class DictationCoordinator: ObservableObject {
         )
         guard duration >= 0.35 else {
             FileLog.write("  -> discarded: shorter than 0.35 s")
+            discardLiveSession()
             // If the device took seconds to start, the key was held long
             // enough — the stall ate the recording. Don't discard silently.
             if lastStartDuration >= Self.slowStartThreshold {
@@ -310,7 +330,15 @@ final class DictationCoordinator: ObservableObject {
         // "No speech was recognized" — name the device that produced it instead.
         guard peak >= Self.silenceThreshold else {
             FileLog.write("  -> silent recording, not transcribing")
+            discardLiveSession()
             reportError("No audio from \(activeDeviceLabel). Check the microphone and its input level.")
+            return
+        }
+
+        if let live = liveSession {
+            state.phase = .transcribing
+            state.statusDetail = "Correcting…"
+            transcriptionTask = Task { await finishLiveSession(live, samples: samples) }
             return
         }
 
@@ -322,14 +350,29 @@ final class DictationCoordinator: ObservableObject {
         transcriptionTask = Task { await runTranscription(request) }
     }
 
-    /// Esc during recording: discard everything — no insert, no clipboard write.
+    /// Esc during recording: discard everything. Live text already typed is
+    /// removed while the field is still ours; the clipboard gets its
+    /// pre-recording content back.
     func cancelDictation() {
         guard state.phase == .recording else { return }
-        escapeTap.disarm()
+        keyTap.stopEscape()
         captureEngine.cancel()
-        state.phase = .idle
         FileLog.write("CANCEL recording discarded")
         Log.app.info("Recording cancelled")
+        guard let live = liveSession else {
+            keyTap.stop()
+            state.phase = .idle
+            return
+        }
+        // Busy until the typed text is gone, so no new recording types into it.
+        state.phase = .transcribing
+        state.statusDetail = "Cancelling…"
+        Task {
+            await live.cancel()
+            endLiveSession(live)
+            state.statusDetail = nil
+            state.phase = .idle
+        }
     }
 
     private func runTranscription(_ request: TranscriptionRequest) async {
@@ -425,15 +468,161 @@ final class DictationCoordinator: ObservableObject {
         pasteboard.setString(state.lastTranscript, forType: .string)
     }
 
-    // MARK: - Esc (swallowed only while recording)
+    // MARK: - Key tap (Esc swallowed and user input watched only while recording)
 
-    private func armEscapeTap() {
-        guard !escapeTap.arm() else { return }
-        // Without the tap Esc neither cancels nor gets swallowed; say so
-        // unless a microphone warning already occupies the status line.
+    private func startKeyTap(watchInput: Bool) {
+        let shortcuts = [KeyboardShortcuts.Name.toggleDictation, .pushToTalk].compactMap { name in
+            KeyboardShortcuts.getShortcut(for: name).map {
+                UserInputClassifier.Shortcut(keyCode: Int64($0.carbonKeyCode), flags: Self.eventFlags($0.modifiers))
+            }
+        }
+        guard !keyTap.start(watchInput: watchInput, dictationShortcuts: shortcuts) else { return }
+        // Without the tap Esc neither cancels nor gets swallowed, and live
+        // typing cannot notice the user typing; say so unless a microphone
+        // warning already occupies the status line.
         if state.captureNotice == nil {
             state.captureNotice = "Esc cancel off — grant Accessibility"
         }
+        if watchInput { liveSession?.typer?.lock(.userInput) }
+    }
+
+    private static func eventFlags(_ modifiers: NSEvent.ModifierFlags) -> CGEventFlags {
+        var flags: CGEventFlags = []
+        if modifiers.contains(.command) { flags.insert(.maskCommand) }
+        if modifiers.contains(.option) { flags.insert(.maskAlternate) }
+        if modifiers.contains(.control) { flags.insert(.maskControl) }
+        if modifiers.contains(.shift) { flags.insert(.maskShift) }
+        return flags
+    }
+
+    // MARK: - Live dictation
+
+    /// Keeps the SpeechTranscriber model for the dictation language installed,
+    /// so a recording never waits for a download.
+    private func setUpLiveRecognizer() {
+        settings.$language
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.liveLocale = nil
+                self?.prepareLiveLocale()
+            }
+            .store(in: &settingsCancellables)
+        settings.$dictationMode
+            .removeDuplicates()
+            .sink { [weak self] mode in
+                if mode == .live { self?.prepareLiveLocale() }
+            }
+            .store(in: &settingsCancellables)
+    }
+
+    private func prepareLiveLocale() {
+        guard #available(macOS 26, *), settings.dictationMode == .live, liveLocalePreparation == nil else { return }
+        let wanted: Locale = switch settings.language {
+        case .german: Locale(identifier: "de_DE")
+        case .english: Locale(identifier: "en_US")
+        case .auto: Locale.current
+        }
+        liveLocalePreparation = Task {
+            var locale = await LiveSpeechRecognizer.prepare(locale: wanted) { FileLog.write($0) }
+            if locale == nil, settings.language == .auto {
+                locale = await LiveSpeechRecognizer.prepare(locale: Locale(identifier: "de_DE")) { FileLog.write($0) }
+            }
+            liveLocale = locale
+            liveLocalePreparation = nil
+            FileLog.write("LIVE recognizer locale: \(locale?.identifier ?? "unavailable, Whisper chunks only")")
+        }
+    }
+
+    /// Nil when this recording runs the classic way: live mode off, a socket
+    /// client records (it reads the transcript itself), or no Accessibility
+    /// (typing impossible).
+    private func makeLiveSession() async -> LiveDictationSession? {
+        guard #available(macOS 26, *), settings.dictationMode == .live, deliveryMode == .hotkey,
+              TextInserter.isAccessibilityTrusted
+        else { return nil }
+        let provider: any TranscriptionProvider
+        do {
+            provider = try await currentProvider()
+        } catch {
+            FileLog.write("LIVE off for this recording: \(error.localizedDescription)")
+            return nil
+        }
+        let session = LiveDictationSession(provider: provider, languageCode: settings.language.languageCode) { [weak self] line in
+            self?.state.liveLine = line
+        }
+        if liveLocale == nil { prepareLiveLocale() }
+        session.startRecognizer(locale: liveLocale)
+        session.typer?.onLock = { [weak self] _ in
+            guard let self, state.phase == .recording, state.captureNotice == nil else { return }
+            state.captureNotice = "Typing stopped — full text goes to the clipboard"
+        }
+        liveSession = session
+        liveSlot.set(session)
+        return session
+    }
+
+    private func finishLiveSession(_ live: LiveDictationSession, samples: [Float]) async {
+        let outcome = await live.finish(samples: samples)
+        endLiveSession(live)
+        state.statusDetail = nil
+        guard !outcome.text.isEmpty else {
+            reportError(TranscriptionError.emptyResult.localizedDescription)
+            return
+        }
+        state.lastTranscript = outcome.text
+        FileLog.write(
+            "INSERT live chars=\(outcome.text.count) field=\(outcome.fieldLock.map { "locked(\($0))" } ?? "in sync") "
+            + "typed=\(outcome.typedAnything) clipboard=final"
+        )
+        if outcome.fieldLock == .typingFailed, !outcome.typedAnything {
+            // Unicode typing did not work at all: the classic paste path.
+            _ = TextInserter.insert(outcome.text)
+        } else if let lock = outcome.fieldLock {
+            NotificationManager.shared.post(title: "Full transcript in clipboard", body: Self.lockExplanation(lock))
+        }
+        state.phase = .success
+        scheduleReturnToIdle(after: 0.8)
+    }
+
+    private static func lockExplanation(_ lock: FieldSync.Lock) -> String {
+        switch lock {
+        case .userInput:
+            "You typed or clicked during dictation, so WhisperStorm stopped typing. Paste the corrected text with Cmd+V."
+        case .focusChanged:
+            "The window changed during dictation, so the rest was not typed. Paste the transcript with Cmd+V."
+        case .secureInput:
+            "Secure Keyboard Entry is active in the focused app, so nothing could be typed. Paste the transcript with Cmd+V."
+        case .cursorMoved:
+            "The text field changed under the cursor, so the correction was not typed. Paste the corrected text with Cmd+V."
+        case .correctionTooLarge:
+            "A correction reached too far back to retype safely. Paste the corrected text with Cmd+V."
+        case .typingFailed:
+            "Typing into the field failed. Paste the transcript with Cmd+V."
+        }
+    }
+
+    /// Too short or silent: nothing worth keeping.
+    private func discardLiveSession() {
+        guard let live = liveSession else { return }
+        Task {
+            await live.cancel()
+            endLiveSession(live)
+        }
+    }
+
+    /// The capture broke off: keep what was typed, finalize the clipboard.
+    private func abandonLiveSession(_ live: LiveDictationSession) {
+        live.abandon()
+        endLiveSession(live)
+    }
+
+    private func endLiveSession(_ live: LiveDictationSession) {
+        guard liveSession === live else { return }
+        liveSession = nil
+        liveSlot.clear()
+        keyTap.stopWatchingInput()
+        state.liveLine = ""
     }
 
     // MARK: - Microphone handling
@@ -486,7 +675,8 @@ final class DictationCoordinator: ObservableObject {
             try captureEngine.switchDevice(to: nil)
         } catch {
             captureEngine.cancel()
-            escapeTap.disarm()
+            keyTap.stop()
+            if let live = liveSession { abandonLiveSession(live) }
             reportError("Recording stopped: \(error.localizedDescription)")
         }
     }
@@ -502,7 +692,8 @@ final class DictationCoordinator: ObservableObject {
             try captureEngine.switchDevice(to: deviceID)
         } catch {
             captureEngine.cancel()
-            escapeTap.disarm()
+            keyTap.stop()
+            if let live = liveSession { abandonLiveSession(live) }
             reportError("Recording stopped: \(error.localizedDescription)")
         }
     }

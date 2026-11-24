@@ -45,6 +45,19 @@ struct GeneralSettingsView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
+            if #available(macOS 26, *) {
+                Picker("Dictation:", selection: $settings.dictationMode) {
+                    ForEach(DictationMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                Text(settings.dictationMode == .live
+                     ? "Words appear in the text field while you speak; Whisper then corrects the last section. The clipboard always holds the full text."
+                     : "The transcript is pasted once the recording stops.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
             Toggle("Lower other audio while recording", isOn: $settings.duckOutputWhileRecording)
 
             if #available(macOS 26, *) {

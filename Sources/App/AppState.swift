@@ -25,6 +25,9 @@ final class AppState: ObservableObject {
     /// fallback to the system default input when the selected microphone is
     /// gone. Recording from an unexpected device must never be silent.
     @Published var captureNotice: String?
+    /// Live dictation: confirmed and provisional words of the running
+    /// recording, shown in the overlay instead of "Listening".
+    @Published var liveLine = ""
     /// The General settings tab is open: keep the idle overlay on screen as
     /// a live preview of opacity, blur and Liquid Glass.
     @Published var overlayPreview = false

@@ -26,6 +26,18 @@ struct MenuBarView: View {
                 .labelsHidden()
         }
 
+        if #available(macOS 26, *) {
+            Menu("Dictation") {
+                Picker("Dictation", selection: $settings.dictationMode) {
+                    ForEach(DictationMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            }
+        }
+
         Divider()
 
         Button("Settings…") {
