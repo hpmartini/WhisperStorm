@@ -37,7 +37,7 @@ final class DictationCoordinator: ObservableObject {
 
     private lazy var keyTap = RecordingKeyTap(
         onEscape: { [weak self] in MainActor.assumeIsolated { self?.cancelDictation() } },
-        onUserInput: { [liveSlot] in liveSlot.userInput() }
+        onUserInput: { [liveSlot] event in liveSlot.userInput(event) }
     )
     /// Off-main entry points (capture queue, key tap thread) of the live session.
     private let liveSlot = LiveSessionSlot()
@@ -403,19 +403,7 @@ final class DictationCoordinator: ObservableObject {
             if deliveryMode == .hotkey {
                 let outcome = TextInserter.insert(text)
                 state.phase = .success
-                if case .clipboardOnly(let reason, let accessibilityMissing) = outcome {
-                    if accessibilityMissing {
-                        NotificationManager.shared.post(
-                            title: "Copied to clipboard — insertion disabled",
-                            body: "WhisperStorm has no Accessibility permission (rebuilds reset it). System Settings > Privacy & Security > Accessibility: remove WhisperStorm with \u{2212}, then re-add and enable it. The transcript is in your clipboard."
-                        )
-                    } else {
-                        NotificationManager.shared.post(
-                            title: "Copied to clipboard",
-                            body: "The transcript could not be inserted (\(reason.lowercased())). It is in your clipboard — paste it with Cmd+V."
-                        )
-                    }
-                }
+                notifyIfNotInserted(outcome)
             } else {
                 // Socket delivery: the caller reads the transcript over the wire.
                 FileLog.write("  -> socket delivery: transcript returned to the client, not pasted")
@@ -573,18 +561,44 @@ final class DictationCoordinator: ObservableObject {
             return
         }
         state.lastTranscript = outcome.text
+        let delivery = FieldSync.finalDelivery(lock: outcome.fieldLock, typedAnything: outcome.typedAnything)
         FileLog.write(
             "INSERT live chars=\(outcome.text.count) field=\(outcome.fieldLock.map { "locked(\($0))" } ?? "in sync") "
-            + "typed=\(outcome.typedAnything) clipboard=final"
+            + "typed=\(outcome.typedAnything) delivery=\(delivery) clipboard=final"
         )
-        if outcome.fieldLock == .typingFailed, !outcome.typedAnything {
-            // Unicode typing did not work at all: the classic paste path.
-            _ = TextInserter.insert(outcome.text)
-        } else if let lock = outcome.fieldLock {
-            NotificationManager.shared.post(title: "Full transcript in clipboard", body: Self.lockExplanation(lock))
+        switch delivery {
+        case .inField:
+            state.phase = .success
+            scheduleReturnToIdle(after: 0.8)
+        case .paste:
+            // The field is untouched: deliver like the classic mode.
+            let inserted = TextInserter.insert(outcome.text)
+            state.phase = .success
+            notifyIfNotInserted(inserted)
+            scheduleReturnToIdle(after: 0.8)
+        case .clipboardOnly:
+            if let lock = outcome.fieldLock {
+                NotificationManager.shared.post(title: "Full transcript in clipboard", body: Self.lockExplanation(lock))
+            }
+            state.successNotice = "Rest in clipboard — press ⌘V"
+            state.phase = .success
+            scheduleReturnToIdle(after: 3)
         }
-        state.phase = .success
-        scheduleReturnToIdle(after: 0.8)
+    }
+
+    private func notifyIfNotInserted(_ outcome: TextInserter.Outcome) {
+        guard case .clipboardOnly(let reason, let accessibilityMissing) = outcome else { return }
+        if accessibilityMissing {
+            NotificationManager.shared.post(
+                title: "Copied to clipboard — insertion disabled",
+                body: "WhisperStorm has no Accessibility permission (rebuilds reset it). System Settings > Privacy & Security > Accessibility: remove WhisperStorm with \u{2212}, then re-add and enable it. The transcript is in your clipboard."
+            )
+        } else {
+            NotificationManager.shared.post(
+                title: "Copied to clipboard",
+                body: "The transcript could not be inserted (\(reason.lowercased())). It is in your clipboard — paste it with Cmd+V."
+            )
+        }
     }
 
     private static func lockExplanation(_ lock: FieldSync.Lock) -> String {
@@ -640,6 +654,7 @@ final class DictationCoordinator: ObservableObject {
     /// exactly like a broken app.
     private func resolveCaptureDevice() -> AudioInputDevice? {
         state.captureNotice = nil
+        state.successNotice = nil
         guard let uid = settings.selectedMicrophoneUID else { return nil }
         if let device = deviceManager.device(withUID: uid) {
             return device

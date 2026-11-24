@@ -28,6 +28,9 @@ final class AppState: ObservableObject {
     /// Live dictation: confirmed and provisional words of the running
     /// recording, shown in the overlay instead of "Listening".
     @Published var liveLine = ""
+    /// Shown in the overlay after a live dictation whose field stopped
+    /// following the transcript, so the user knows to paste the rest.
+    @Published var successNotice: String?
     /// The General settings tab is open: keep the idle overlay on screen as
     /// a live preview of opacity, blur and Liquid Glass.
     @Published var overlayPreview = false

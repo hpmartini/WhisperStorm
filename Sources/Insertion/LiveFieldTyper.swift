@@ -53,7 +53,24 @@ final class LiveFieldTyper {
         abort.set()
         guard !sync.isLocked else { return }
         sync.lock(reason)
-        FileLog.write("LIVE field locked: \(reason) (typed chars=\(sync.delivered.count))")
+        reportLock(reason, cause: nil)
+    }
+
+    /// The key tap saw the user type or click (`event` describes it, for the log).
+    func userInput(_ event: String) {
+        guard !sync.isLocked else { return }
+        guard sync.userInput(whileTyping: posting) else {
+            // The tap thread set the abort flag already; nothing is being typed, so clear it.
+            abort.clear()
+            FileLog.write("LIVE user input before any typing, field still ours (\(event))")
+            return
+        }
+        abort.set()
+        reportLock(.userInput, cause: event)
+    }
+
+    private func reportLock(_ reason: FieldSync.Lock, cause: String?) {
+        FileLog.write("LIVE field locked: \(reason) (typed chars=\(sync.delivered.count)\(cause.map { ", \($0)" } ?? ""))")
         onLock?(reason)
     }
 
@@ -213,4 +230,5 @@ final class AbortFlag: @unchecked Sendable {
 
     var isSet: Bool { lock.withLock { value } }
     func set() { lock.withLock { value = true } }
+    func clear() { lock.withLock { value = false } }
 }
