@@ -60,7 +60,7 @@ Errors (server unreachable, model not loaded, …) are never silent: they appear
 
 - Configurable global shortcut (default ⌥ Space), working in every app.
 - Two modes: **Toggle** (press to start, press again to stop and transcribe — default) and **Push-to-talk** (hold to record, release to transcribe; optional "tap to toggle" for taps shorter than 0.3 s).
-- Esc while recording cancels: nothing is inserted, the clipboard is untouched.
+- Esc while recording cancels: nothing is inserted, the clipboard is untouched. The Esc press (and its key-up) is swallowed by an active `CGEventTap` and never reaches the frontmost app; outside a recording the tap is disabled. Needs Accessibility; without it the overlay says so.
 
 ### 2. Result insertion (text field and clipboard)
 

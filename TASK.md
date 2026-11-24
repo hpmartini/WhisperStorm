@@ -1,5 +1,36 @@
 # TASK.md — Issue Log
 
+## 2026-11-24 — Esc cancels the recording and also aborts the agent in front
+
+### Issue
+Esc during a recording cancelled it, but the same press reached the frontmost
+app. In a terminal or agent chat with a running agent, that aborted the agent.
+
+### Root cause
+Esc was watched with `NSEvent.addGlobalMonitorForEvents`. Global monitors only
+observe; they cannot consume an event. Reproduced on main (290be4d): a key
+reader in Terminal logged `\x1b` for the Esc pressed during a recording.
+
+### Fix
+- `EscapeKeyTap`: an active `CGEventTap` (session level, head insert) enabled
+  only while recording. It swallows the Esc key-down, its auto-repeats and
+  its key-up; ⌘/⌥/⌃+Esc pass (Force Quit). Rules live in `EscapeKeyFilter`
+  (unit-tested).
+- The tap runs on its own thread: `captureEngine.start` can block the main
+  actor for seconds, and a tap on a blocked run loop lags every keystroke.
+- Without Accessibility the tap cannot be created; the overlay shows
+  "Esc cancel off — grant Accessibility" instead of "Listening".
+
+### Verification
+A listen-only tap appended after ours logged which Esc events still reach
+apps: the press outside the recording and both presses after it passed, the
+press during the recording did not (`ESC swallowed during recording`,
+`CANCEL recording discarded` in the file log).
+
+### Limit
+Secure Keyboard Entry hides keys from every event tap: there Esc reaches the
+app and does not cancel (same as before).
+
 ## 2026-10-14 — Overlay "blur" setting only darkens, never blurs
 
 ### Issue

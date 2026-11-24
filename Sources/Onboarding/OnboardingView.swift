@@ -45,7 +45,7 @@ struct OnboardingView: View {
 
             PermissionRow(
                 title: "Accessibility",
-                explanation: "Required to insert the transcript into the active text field (synthesized Cmd+V). Without it, transcripts are only copied to the clipboard.",
+                explanation: "Required to insert the transcript into the active text field (synthesized Cmd+V), and to catch Esc during a recording: Esc then cancels the recording without reaching the app you are in. Without it, transcripts are only copied to the clipboard.",
                 status: permissions.accessibilityGranted ? .green : .red,
                 statusText: permissions.accessibilityGranted ? "Granted" : "Not granted",
                 actionTitle: "Open System Settings"
