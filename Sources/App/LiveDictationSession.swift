@@ -285,14 +285,14 @@ final class LiveSessionSlot: @unchecked Sendable {
     private let lock = NSLock()
     private var feeder: LiveFeeder?
     private var abort: AbortFlag?
-    private var lockField: (@MainActor () -> Void)?
+    private var reportInput: (@MainActor (String) -> Void)?
 
     @MainActor
     func set(_ session: LiveDictationSession) {
         lock.withLock {
             feeder = session.feeder
             abort = session.abort
-            lockField = { [weak session] in session?.typer?.lock(.userInput) }
+            reportInput = { [weak session] event in session?.typer?.userInput(event) }
         }
     }
 
@@ -300,7 +300,7 @@ final class LiveSessionSlot: @unchecked Sendable {
         lock.withLock {
             feeder = nil
             abort = nil
-            lockField = nil
+            reportInput = nil
         }
     }
 
@@ -308,12 +308,13 @@ final class LiveSessionSlot: @unchecked Sendable {
         lock.withLock { feeder }?.feed(samples, at: offset)
     }
 
-    /// The user typed or clicked: stop a running burst now, lock the field.
-    func userInput() {
-        let (abort, lockField) = lock.withLock { (abort, lockField) }
+    /// The user typed or clicked: stop a running burst now; the typer then
+    /// decides on the main actor whether the field must lock.
+    func userInput(_ event: String) {
+        let (abort, reportInput) = lock.withLock { (abort, reportInput) }
         abort?.set()
-        if let lockField {
-            DispatchQueue.main.async { MainActor.assumeIsolated { lockField() } }
+        if let reportInput {
+            DispatchQueue.main.async { MainActor.assumeIsolated { reportInput(event) } }
         }
     }
 }

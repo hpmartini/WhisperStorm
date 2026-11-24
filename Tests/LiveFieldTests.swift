@@ -79,6 +79,39 @@ final class FieldSyncTests: XCTestCase {
         sync.apply(sync.plan(toward: "Satz eins. äh")!)
         XCTAssertEqual(sync.plan(toward: "Satz eins."), .init(deleteCount: 3, insert: ""))
     }
+
+    // Regression 2026-11-24 15:23:32Z: a click before any word was typed locked the
+    // field, nothing reached it, the transcript ended up on the clipboard only.
+    func testInputBeforeAnyTypingKeepsTheFieldOurs() {
+        var sync = FieldSync()
+        XCTAssertFalse(sync.userInput(whileTyping: false))
+        XCTAssertFalse(sync.isLocked)
+        XCTAssertEqual(sync.plan(toward: "Hallo"), .init(deleteCount: 0, insert: "Hallo"), "typing still starts")
+    }
+
+    func testInputAfterTypingLocks() {
+        var sync = FieldSync()
+        sync.apply(sync.plan(toward: "Hallo")!)
+        XCTAssertTrue(sync.userInput(whileTyping: false))
+        XCTAssertEqual(sync.lock, .userInput)
+    }
+
+    func testInputDuringTheFirstBurstLocks() {
+        // The burst may be cut off half-way: the field no longer matches what we think we typed.
+        var sync = FieldSync()
+        XCTAssertTrue(sync.userInput(whileTyping: true))
+        XCTAssertEqual(sync.lock, .userInput)
+    }
+
+    func testFinalDelivery() {
+        XCTAssertEqual(FieldSync.finalDelivery(lock: nil, typedAnything: true), .inField)
+        XCTAssertEqual(FieldSync.finalDelivery(lock: .userInput, typedAnything: false), .paste,
+                       "field untouched: paste like the classic mode instead of clipboard only")
+        XCTAssertEqual(FieldSync.finalDelivery(lock: .focusChanged, typedAnything: false), .paste)
+        XCTAssertEqual(FieldSync.finalDelivery(lock: .typingFailed, typedAnything: false), .paste)
+        XCTAssertEqual(FieldSync.finalDelivery(lock: .userInput, typedAnything: true), .clipboardOnly,
+                       "part is in the field: never paste the whole text on top")
+    }
 }
 
 final class UserInputClassifierTests: XCTestCase {
@@ -109,6 +142,12 @@ final class UserInputClassifierTests: XCTestCase {
         XCTAssertFalse(classifier.isUserInput(type: .keyDown, keyCode: EscapeKeyFilter.escapeKeyCode, flags: [], userData: 0))
         XCTAssertFalse(classifier.isUserInput(type: .keyUp, keyCode: letterA, flags: [], userData: 0))
         XCTAssertFalse(classifier.isUserInput(type: .flagsChanged, keyCode: 58, flags: .maskAlternate, userData: 0))
+    }
+
+    func testPointerMovesScrollsAndModifiersDoNotCount() {
+        for type: CGEventType in [.mouseMoved, .scrollWheel, .leftMouseDragged, .leftMouseUp, .flagsChanged] {
+            XCTAssertFalse(classifier.isUserInput(type: type, keyCode: 0, flags: [], userData: 0), "\(type.rawValue)")
+        }
     }
 
     func testSameKeyWithOtherModifiersCounts() {

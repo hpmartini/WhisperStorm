@@ -108,6 +108,13 @@ struct OverlayView: View {
             Text("Preview — adjust in Settings")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(CyberpunkPalette.cyan)
+        case .success where state.successNotice != nil:
+            Text(state.successNotice ?? "")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(CyberpunkPalette.errorOrange)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 12)
         case .success, .idle:
             Text("")
                 .font(.system(size: 11))

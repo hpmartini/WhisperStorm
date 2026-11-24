@@ -40,6 +40,30 @@ struct FieldSync: Equatable {
         if lock == nil { lock = reason }
     }
 
+    /// The user typed or clicked. Before anything was typed the field is
+    /// untouched (a click to place the cursor is fine), so nothing could be
+    /// deleted wrongly: no lock. True when this locked the field.
+    mutating func userInput(whileTyping: Bool) -> Bool {
+        guard whileTyping || !delivered.isEmpty else { return false }
+        lock(.userInput)
+        return true
+    }
+
+    enum FinalDelivery: Equatable {
+        /// The field already shows the final transcript.
+        case inField
+        /// Live typing never touched the field: paste the transcript like
+        /// the classic mode does.
+        case paste
+        /// The field holds part of it; the rest is only on the clipboard.
+        case clipboardOnly
+    }
+
+    static func finalDelivery(lock: Lock?, typedAnything: Bool) -> FinalDelivery {
+        guard lock != nil else { return .inField }
+        return typedAnything ? .clipboardOnly : .paste
+    }
+
     /// The edit from `delivered` to `desired`: delete back to the first
     /// differing character, then type the rest. Nil when locked or nothing
     /// changes; locks when the deletion would reach too far back.

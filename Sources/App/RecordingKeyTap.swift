@@ -99,10 +99,11 @@ final class RecordingKeyTap: @unchecked Sendable {
     private var tap: CFMachPort?
     /// Called on the main queue for each Esc press that cancels.
     private let onEscape: @Sendable () -> Void
-    /// Called on the tap thread, before the event reaches any app.
-    private let onUserInput: @Sendable () -> Void
+    /// Called on the tap thread, before the event reaches any app, with a
+    /// short description for the log (event type, key code, source process).
+    private let onUserInput: @Sendable (String) -> Void
 
-    init(onEscape: @escaping @Sendable () -> Void, onUserInput: @escaping @Sendable () -> Void) {
+    init(onEscape: @escaping @Sendable () -> Void, onUserInput: @escaping @Sendable (String) -> Void) {
         self.onEscape = onEscape
         self.onUserInput = onUserInput
     }
@@ -198,7 +199,11 @@ final class RecordingKeyTap: @unchecked Sendable {
                 && classifier.isUserInput(type: type, keyCode: keyCode, flags: event.flags, userData: userData)
             return (decision, isUserInput, needsTap)
         }
-        if isUserInput { onUserInput() }
+        if isUserInput {
+            let source = event.getIntegerValueField(.eventSourceUnixProcessID)
+            let what = type == .keyDown ? "keyDown code=\(keyCode)" : "mouseDown type=\(type.rawValue)"
+            onUserInput("\(what) flags=\(event.flags.rawValue) sourcePID=\(source)")
+        }
         switch decision {
         case .pass:
             return Unmanaged.passUnretained(event)

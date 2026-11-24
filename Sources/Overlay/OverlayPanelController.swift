@@ -62,9 +62,10 @@ final class OverlayPanelController {
         case .recording, .transcribing:
             show()
         case .success:
-            // Keep the success flash visible briefly, then fade out.
+            // Keep the success flash visible briefly, then fade out; longer
+            // when it tells the user to paste the rest.
             show()
-            scheduleHide(after: 0.8)
+            scheduleHide(after: state.successNotice == nil ? 0.8 : 3)
         case .error:
             show()
             scheduleHide(after: 3.5)
