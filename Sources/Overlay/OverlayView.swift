@@ -91,12 +91,18 @@ struct OverlayView: View {
                 .truncationMode(.tail)
                 .padding(.horizontal, 12)
         case .transcribing:
-            Text(state.statusDetail ?? "Transcribing…")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(CyberpunkPalette.magenta)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .padding(.horizontal, 12)
+            // A spinner, not just text: after a live dictation the field is
+            // still being corrected and the user must see that it is not done.
+            HStack(spacing: 6) {
+                Spinner(color: CyberpunkPalette.magenta)
+                    .frame(width: 11, height: 11)
+                Text(state.statusDetail ?? "Transcribing…")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(CyberpunkPalette.magenta)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .padding(.horizontal, 12)
         case .error(let message):
             Text(message)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -108,10 +114,11 @@ struct OverlayView: View {
             Text("Preview — adjust in Settings")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(CyberpunkPalette.cyan)
-        case .success where state.successNotice != nil:
-            Text(state.successNotice ?? "")
+        case .success where state.finishNotice != nil:
+            let notice = state.finishNotice
+            Text(notice?.text ?? "")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(CyberpunkPalette.errorOrange)
+                .foregroundStyle(notice?.isWarning == true ? CyberpunkPalette.errorOrange : CyberpunkPalette.cyan)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .padding(.horizontal, 12)
@@ -333,5 +340,21 @@ private final class WaveformModel {
     private func isError(_ phase: AppState.Phase) -> Bool {
         if case .error = phase { return true }
         return false
+    }
+}
+
+/// Rotating arc drawn by SwiftUI itself (an AppKit `ProgressView` does not
+/// pick up the neon color and renders inconsistently on the glass panel).
+private struct Spinner: View {
+    let color: Color
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let turns = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9
+            Circle()
+                .trim(from: 0, to: 0.72)
+                .stroke(color, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                .rotationEffect(.degrees(turns * 360))
+        }
     }
 }

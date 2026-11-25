@@ -28,9 +28,8 @@ final class AppState: ObservableObject {
     /// Live dictation: confirmed and provisional words of the running
     /// recording, shown in the overlay instead of "Listening".
     @Published var liveLine = ""
-    /// Shown in the overlay after a live dictation whose field stopped
-    /// following the transcript, so the user knows to paste the rest.
-    @Published var successNotice: String?
+    /// Shown in the overlay's success state after a live dictation.
+    @Published var finishNotice: FinishNotice?
     /// The General settings tab is open: keep the idle overlay on screen as
     /// a live preview of opacity, blur and Liquid Glass.
     @Published var overlayPreview = false
@@ -43,6 +42,42 @@ final class AppState: ObservableObject {
         case .error: "waveform.badge.exclamationmark"
         }
     }
+}
+
+/// The overlay's last word after a live dictation, so the end of the
+/// correction is visible and not only noticed by the text changing.
+enum FinishNotice: Equatable {
+    /// The whole-recording pass changed the preview.
+    case corrected
+    /// The pass confirmed the preview as it was.
+    case unchanged
+    /// The pass failed or heard nothing; the live text stays.
+    case correctionFailed
+    /// The field stopped following; the full text is only on the clipboard.
+    case pasteRest
+
+    /// Nil when the text was pasted the classic way (nothing to confirm).
+    static func after(finalPassFailed: Bool, changedPreview: Bool, delivery: FieldSync.FinalDelivery) -> FinishNotice? {
+        switch delivery {
+        case .paste: return nil
+        case .clipboardOnly: return .pasteRest
+        case .inField: return finalPassFailed ? .correctionFailed : changedPreview ? .corrected : .unchanged
+        }
+    }
+
+    var text: String {
+        switch self {
+        case .corrected: "✓ Corrected"
+        case .unchanged: "✓ No changes"
+        case .correctionFailed: "Correction failed — live text kept"
+        case .pasteRest: "Rest in clipboard — press ⌘V"
+        }
+    }
+
+    var isWarning: Bool { self == .correctionFailed || self == .pasteRest }
+
+    /// How long the overlay stays: a glance for confirmations, longer for warnings.
+    var duration: TimeInterval { isWarning ? 3 : 1.2 }
 }
 
 /// Latest smoothed microphone level, polled by the 60 fps waveform renderer.

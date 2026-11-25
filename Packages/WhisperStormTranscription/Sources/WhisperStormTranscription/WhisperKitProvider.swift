@@ -78,12 +78,19 @@ public actor WhisperKitProvider: TranscriptionProvider {
         chunking: ChunkingStrategy?,
         label: String
     ) async throws -> String {
+        // A leading space makes the prompt tokenize like running text; special tokens never belong in a prompt.
+        let promptTokens = request.prompt.flatMap { prompt in
+            pipe.tokenizer.map { tokenizer in
+                tokenizer.encode(text: " " + prompt).filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+            }
+        }
         let options = DecodingOptions(
             task: .transcribe,
             language: request.languageCode,
             detectLanguage: request.languageCode == nil,
             skipSpecialTokens: true,
             withoutTimestamps: true,
+            promptTokens: promptTokens,
             chunkingStrategy: chunking
         )
 

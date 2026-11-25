@@ -159,7 +159,12 @@ final class ControlSocketServer {
         let done = DispatchSemaphore(value: 0)
         let box = ReplyBox()
         let task = Task.detached {
-            let transcriber = FileTranscriber(provider: { try await DictationCoordinator.shared.currentProvider() }, languageCode: language, inbox: FileTranscriber.defaultInbox)
+            let transcriber = FileTranscriber(
+                provider: { try await DictationCoordinator.shared.currentProvider() },
+                languageCode: language,
+                inbox: FileTranscriber.defaultInbox,
+                vocabulary: Vocabulary.load()
+            )
             box.set(await transcriber.run(path: path))
             done.signal()
         }

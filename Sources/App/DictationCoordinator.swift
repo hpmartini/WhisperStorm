@@ -34,6 +34,7 @@ final class DictationCoordinator: ObservableObject {
     )
     private var overlayController: OverlayPanelController?
     private let onboardingController = OnboardingWindowController()
+    private let vocabularyController = VocabularyWindowController()
 
     private lazy var keyTap = RecordingKeyTap(
         onEscape: { [weak self] in MainActor.assumeIsolated { self?.cancelDictation() } },
@@ -342,12 +343,14 @@ final class DictationCoordinator: ObservableObject {
             return
         }
 
+        let vocabulary = Vocabulary.load()
         let request = TranscriptionRequest(
             samples: samples,
-            languageCode: settings.language.languageCode
+            languageCode: settings.language.languageCode,
+            prompt: vocabulary.prompt
         )
         state.phase = .transcribing
-        transcriptionTask = Task { await runTranscription(request) }
+        transcriptionTask = Task { await runTranscription(request, vocabulary: vocabulary) }
     }
 
     /// Esc during recording: discard everything. Live text already typed is
@@ -375,7 +378,7 @@ final class DictationCoordinator: ObservableObject {
         }
     }
 
-    private func runTranscription(_ request: TranscriptionRequest) async {
+    private func runTranscription(_ request: TranscriptionRequest, vocabulary: Vocabulary) async {
         defer {
             state.statusDetail = nil
             if modelManager.preparingVariant == settings.whisperKitModel {
@@ -395,7 +398,7 @@ final class DictationCoordinator: ObservableObject {
             state.statusDetail = nil
 
             let started = Date()
-            let text = try await provider.transcribe(request)
+            let text = vocabulary.apply(to: try await provider.transcribe(request))
             Log.transcription.info("Transcribed \(request.duration, format: .fixed(precision: 1)) s of audio in \(Date().timeIntervalSince(started), format: .fixed(precision: 1)) s")
 
             FileLog.write("TRANSCRIBED chars=\(text.count)")
@@ -431,6 +434,10 @@ final class DictationCoordinator: ObservableObject {
 
     func showOnboarding() {
         onboardingController.show()
+    }
+
+    func showVocabulary() {
+        vocabularyController.show()
     }
 
     private func warmUpWhisperModelIfActive(_ variant: String) {
@@ -538,7 +545,9 @@ final class DictationCoordinator: ObservableObject {
             FileLog.write("LIVE off for this recording: \(error.localizedDescription)")
             return nil
         }
-        let session = LiveDictationSession(provider: provider, languageCode: settings.language.languageCode) { [weak self] line in
+        let session = LiveDictationSession(
+            provider: provider, languageCode: settings.language.languageCode, vocabulary: Vocabulary.load()
+        ) { [weak self] line in
             self?.state.liveLine = line
         }
         if liveLocale == nil { prepareLiveLocale() }
@@ -568,22 +577,21 @@ final class DictationCoordinator: ObservableObject {
         )
         switch delivery {
         case .inField:
-            state.phase = .success
-            scheduleReturnToIdle(after: 0.8)
+            break
         case .paste:
             // The field is untouched: deliver like the classic mode.
-            let inserted = TextInserter.insert(outcome.text)
-            state.phase = .success
-            notifyIfNotInserted(inserted)
-            scheduleReturnToIdle(after: 0.8)
+            notifyIfNotInserted(TextInserter.insert(outcome.text))
         case .clipboardOnly:
             if let lock = outcome.fieldLock {
                 NotificationManager.shared.post(title: "Full transcript in clipboard", body: Self.lockExplanation(lock))
             }
-            state.successNotice = "Rest in clipboard — press ⌘V"
-            state.phase = .success
-            scheduleReturnToIdle(after: 3)
         }
+        let notice = FinishNotice.after(
+            finalPassFailed: outcome.finalPassFailed, changedPreview: outcome.changedPreview, delivery: delivery
+        )
+        state.finishNotice = notice
+        state.phase = .success
+        scheduleReturnToIdle(after: notice?.duration ?? 0.8)
     }
 
     private func notifyIfNotInserted(_ outcome: TextInserter.Outcome) {
@@ -654,7 +662,7 @@ final class DictationCoordinator: ObservableObject {
     /// exactly like a broken app.
     private func resolveCaptureDevice() -> AudioInputDevice? {
         state.captureNotice = nil
-        state.successNotice = nil
+        state.finishNotice = nil
         guard let uid = settings.selectedMicrophoneUID else { return nil }
         if let device = deviceManager.device(withUID: uid) {
             return device
