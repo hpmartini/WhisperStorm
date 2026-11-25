@@ -77,6 +77,7 @@ Two modes, chosen in Settings > General > Dictation. **Live** is the default on 
 - At the end: field in sync → done. Locked before anything was typed → the final text is pasted like the classic mode. Locked after typing → field stays as is, the full transcript is on the clipboard, the overlay shows "Rest in clipboard — press ⌘V" for 3 s and a notification says why.
 - The clipboard follows the confirmed transcript. Intermediate states carry `org.nspasteboard.TransientType`, so clipboard history apps skip them; only the final transcript is a normal entry.
 - If live typing cannot post events at all, the final text is pasted with Cmd+V.
+- From the stop until the final pass is typed, the overlay shows a spinner with "Correcting…" and the menu-bar icon stays in its processing state. Then for 1.2 s "✓ Corrected" (the pass changed the preview) or "✓ No changes"; for 3 s a warning when the pass failed ("Correction failed — live text kept") or the field was locked ("Rest in clipboard — press ⌘V"). The overlay never takes focus.
 - File log: `LIVE …` lines, including `lag word→field` (p50/p90/max) per recording.
 
 #### 2b. When recording stops (classic)
@@ -84,6 +85,12 @@ Two modes, chosen in Settings > General > Dictation. **Live** is the default on 
 - After transcription the text is (a) written to the clipboard — and stays there, the previous contents are not restored — and (b) pasted into the focused app by setting `NSPasteboard` and posting Cmd+V as a `CGEvent`.
 - Requires the Accessibility permission. The overlay must never steal focus from the target app.
 - Edge case: no focused text field or paste fails → the text is still on the clipboard and a "Copied to clipboard" notification is shown.
+
+#### 2c. Vocabulary
+
+- `~/Library/Application Support/WhisperStorm/vocabulary.txt`, edited in menu bar → *Vocabulary…* (list, + / −, import from a text file, open as text file) or any text editor. Read fresh for every transcription: no restart.
+- One entry per line: `Term`, or `wrong → right` (`->` works too); `#` comments. Default list: DATEV, ADDISON, Belegfreigabe, Mandant, Umsatzsteuervoranmeldung, Done-Kriterien (`Dann-Kriterien → Done-Kriterien`), Orkumo, MAGOS, TapeStorm, WhisperStorm, Codex, Claude.
+- Terms become Whisper's prompt ("Glossar: …", at most 400 characters, earlier lines first) for every Whisper call: classic, live chunks, live final, socket file transcription. After each run, `wrong → right` rules replace whole words (any case), and acronym/CamelCase terms get their spelling ("Addison" → "ADDISON"); ordinary-word terms keep Whisper's case.
 
 ### 3. Listening overlay
 

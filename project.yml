@@ -26,6 +26,7 @@ targets:
           - App/FileTranscription.swift
           - App/AppState.swift
           - App/RecordingKeyTap.swift
+          - App/Vocabulary.swift
           - Insertion/FieldSync.swift
           - Insertion/ClipboardMirror.swift
           - Audio/AudioCaptureEngine.swift

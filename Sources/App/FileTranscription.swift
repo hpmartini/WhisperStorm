@@ -33,6 +33,8 @@ struct FileTranscriber {
     let languageCode: String?
     /// Only files inside this directory are read; otherwise any same-user process could borrow WhisperStorm's TCC grants through the socket.
     let inbox: URL
+    /// Prompt and replacements, as for dictation.
+    var vocabulary = Vocabulary(text: "")
 
     static let defaultInbox = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/WhisperStorm/inbox", isDirectory: true)
 
@@ -51,7 +53,8 @@ struct FileTranscriber {
             let samples = try Self.decode(url)
             let provider = try await provider()
             try await provider.prepare()
-            let text = try await provider.transcribe(TranscriptionRequest(samples: samples, languageCode: languageCode))
+            let request = TranscriptionRequest(samples: samples, languageCode: languageCode, prompt: vocabulary.prompt)
+            let text = vocabulary.apply(to: try await provider.transcribe(request))
             return ["ok": true, "phase": "success", "text": text]
         } catch {
             return ["ok": false, "phase": "error", "error": error.localizedDescription]

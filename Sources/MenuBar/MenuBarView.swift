@@ -48,6 +48,10 @@ struct MenuBarView: View {
         }
         .keyboardShortcut(",", modifiers: .command)
 
+        Button("Vocabulary…") {
+            coordinator.showVocabulary()
+        }
+
         Button("Setup Assistant…") {
             coordinator.showOnboarding()
         }

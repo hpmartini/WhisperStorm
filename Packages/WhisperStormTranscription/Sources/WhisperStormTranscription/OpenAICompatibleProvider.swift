@@ -35,7 +35,8 @@ public struct OpenAICompatibleProvider: TranscriptionProvider {
         urlRequest.httpBody = multipartBody(
             boundary: boundary,
             wavData: wavData,
-            languageCode: request.languageCode
+            languageCode: request.languageCode,
+            prompt: request.prompt
         )
 
         let data: Data
@@ -87,7 +88,7 @@ public struct OpenAICompatibleProvider: TranscriptionProvider {
         return url
     }
 
-    private func multipartBody(boundary: String, wavData: Data, languageCode: String?) -> Data {
+    private func multipartBody(boundary: String, wavData: Data, languageCode: String?, prompt: String?) -> Data {
         var body = Data()
 
         func appendField(name: String, value: String) {
@@ -100,6 +101,9 @@ public struct OpenAICompatibleProvider: TranscriptionProvider {
         appendField(name: "response_format", value: "json")
         if let languageCode {
             appendField(name: "language", value: languageCode)
+        }
+        if let prompt {
+            appendField(name: "prompt", value: prompt)
         }
 
         body.append(Data("--\(boundary)\r\n".utf8))

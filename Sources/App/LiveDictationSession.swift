@@ -18,6 +18,10 @@ final class LiveDictationSession {
         /// Why the field stopped following the transcript, if it did.
         let fieldLock: FieldSync.Lock?
         let typedAnything: Bool
+        /// The whole-recording pass failed or heard nothing; `text` is the live text.
+        let finalPassFailed: Bool
+        /// The final text differs from what the preview showed.
+        let changedPreview: Bool
     }
 
     /// Nil when no app was in front at the start; the transcript then only
@@ -28,6 +32,7 @@ final class LiveDictationSession {
     private let clipboard: ClipboardMirror
     private let provider: any TranscriptionProvider
     private let languageCode: String?
+    private let vocabulary: Vocabulary
     private let startedAt = Date()
     private let onLiveLine: (String) -> Void
 
@@ -47,12 +52,14 @@ final class LiveDictationSession {
     init(
         provider: any TranscriptionProvider,
         languageCode: String?,
+        vocabulary: Vocabulary,
         clipboard: ClipboardMirror? = nil,
         onLiveLine: @escaping (String) -> Void
     ) {
         self.provider = provider
         self.clipboard = clipboard ?? ClipboardMirror()
         self.languageCode = languageCode
+        self.vocabulary = vocabulary
         self.onLiveLine = onLiveLine
         typer = LiveFieldTyper(abort: abort)
         let (chunks, sink) = AsyncStream<SpeechChunk>.makeStream()
@@ -113,13 +120,18 @@ final class LiveDictationSession {
         }
         let live = Self.joined(text.confirmedText, text.provisionalText)
         let final: String
+        let finalPassFailed: Bool
         if let whole = await whole, !whole.isEmpty {
             final = whole
+            finalPassFailed = false
         } else {
             FileLog.write("LIVE final pass gave no text: keeping the live text")
             final = live
+            finalPassFailed = true
         }
-        FileLog.write("LIVE final pass chars=\(final.count) (live preview chars=\(live.count))")
+        // What the user saw: the field's preview, else the overlay's.
+        let preview = typer.map(\.sync.delivered).flatMap { $0.isEmpty ? nil : $0 } ?? live
+        FileLog.write("LIVE final pass chars=\(final.count) (live preview chars=\(live.count), changed=\(final != preview))")
         onLiveLine("")
         if let typer {
             typer.update(to: final, isFinal: true)
@@ -130,7 +142,9 @@ final class LiveDictationSession {
         return Outcome(
             text: final,
             fieldLock: typer == nil ? .focusChanged : typer?.sync.lock,
-            typedAnything: !(typer?.sync.delivered.isEmpty ?? true)
+            typedAnything: !(typer?.sync.delivered.isEmpty ?? true),
+            finalPassFailed: finalPassFailed,
+            changedPreview: final != preview
         )
     }
 
@@ -191,7 +205,8 @@ final class LiveDictationSession {
     private func transcribe(_ chunk: SpeechChunk) async -> String? {
         do {
             try await provider.prepare()
-            let result = try await provider.transcribe(TranscriptionRequest(samples: chunk.samples, languageCode: languageCode))
+            let request = TranscriptionRequest(samples: chunk.samples, languageCode: languageCode, prompt: vocabulary.prompt)
+            let result = vocabulary.apply(to: try await provider.transcribe(request))
             FileLog.write("LIVE whisper chunk \(String(format: "%.1f", chunk.start))+\(String(format: "%.1f", chunk.duration))s chars=\(result.count)")
             return result.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch TranscriptionError.emptyResult {
@@ -207,7 +222,8 @@ final class LiveDictationSession {
     private func transcribeWhole(_ samples: [Float]) async -> String? {
         do {
             try await provider.prepare()
-            let whole = try await provider.transcribe(TranscriptionRequest(samples: samples, languageCode: languageCode))
+            let request = TranscriptionRequest(samples: samples, languageCode: languageCode, prompt: vocabulary.prompt)
+            let whole = vocabulary.apply(to: try await provider.transcribe(request))
             return whole.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         } catch {
             FileLog.write("LIVE final pass failed: \(error.localizedDescription)")

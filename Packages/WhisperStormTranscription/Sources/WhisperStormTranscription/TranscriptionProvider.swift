@@ -1,6 +1,7 @@
 import Foundation
 
-/// Input for a transcription run: 16 kHz mono Float32 PCM plus language hint.
+/// Input for a transcription run: 16 kHz mono Float32 PCM plus language hint
+/// and an optional prompt (domain vocabulary that biases spelling).
 public struct TranscriptionRequest {
     /// Sample rate every provider expects; capture code converts to it.
     public static let sampleRate: Double = 16_000
@@ -8,10 +9,13 @@ public struct TranscriptionRequest {
     public let samples: [Float]
     /// ISO 639-1 code ("de", "en") or nil for auto-detect.
     public let languageCode: String?
+    /// Text Whisper treats as preceding context, e.g. "Glossar: DATEV, ADDISON."; nil for none.
+    public let prompt: String?
 
-    public init(samples: [Float], languageCode: String?) {
+    public init(samples: [Float], languageCode: String?, prompt: String? = nil) {
         self.samples = samples
         self.languageCode = languageCode
+        self.prompt = prompt
     }
 
     public var duration: TimeInterval {
