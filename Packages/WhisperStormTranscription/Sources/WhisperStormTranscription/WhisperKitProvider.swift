@@ -11,6 +11,10 @@ public actor WhisperKitProvider: TranscriptionProvider {
 
     private var pipeline: WhisperKit?
     private var loadedVariant: String?
+    /// The load in progress. The actor is reentrant while WhisperKit loads, so
+    /// without this a dictation during the launch warm-up started a second load
+    /// of the same model next to it (2026-11-25: both stalled, dictation hung).
+    private var loading: (variant: String, task: Task<WhisperKit, Error>)?
     private var desiredVariant: String
     /// Receives per-run diagnostics (levels, segment counts); the macOS app writes them to its file log.
     private let diagnostics: (@Sendable (String) -> Void)?
@@ -149,6 +153,10 @@ public actor WhisperKitProvider: TranscriptionProvider {
         if let pipeline, loadedVariant == variant {
             return pipeline
         }
+        if let loading, loading.variant == variant {
+            diagnostics?("  WHISPER model \(variant): waiting for the load in progress")
+            return try await loading.task.value
+        }
         guard WhisperModelManager.isDownloaded(variant) else {
             throw TranscriptionError.modelNotDownloaded(variant)
         }
@@ -157,6 +165,7 @@ public actor WhisperKitProvider: TranscriptionProvider {
         loadedVariant = nil
         let loadStart = Date()
         Log.transcription.notice("Loading WhisperKit model \(variant)")
+        diagnostics?("WHISPER model \(variant): loading")
 
         let config = WhisperKitConfig(
             model: variant,
@@ -169,13 +178,23 @@ public actor WhisperKitProvider: TranscriptionProvider {
             load: true,
             download: false
         )
+        let task = Task { try await WhisperKit(config) }
+        loading = (variant, task)
+        defer {
+            if loading?.variant == variant { loading = nil }
+        }
         do {
-            let pipe = try await WhisperKit(config)
-            pipeline = pipe
-            loadedVariant = variant
-            Log.transcription.notice("WhisperKit model \(variant) loaded in \(Int(Date().timeIntervalSince(loadStart)))s")
+            let pipe = try await task.value
+            if desiredVariant == variant {
+                pipeline = pipe
+                loadedVariant = variant
+            }
+            let seconds = Int(Date().timeIntervalSince(loadStart))
+            Log.transcription.notice("WhisperKit model \(variant) loaded in \(seconds)s")
+            diagnostics?("WHISPER model \(variant): loaded in \(seconds) s")
             return pipe
         } catch {
+            diagnostics?("WHISPER model \(variant): load failed: \(error.localizedDescription)")
             throw TranscriptionError.modelLoadFailed(error.localizedDescription)
         }
     }

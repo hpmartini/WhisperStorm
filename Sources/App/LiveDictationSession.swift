@@ -104,24 +104,36 @@ final class LiveDictationSession {
     /// Stops the live preview and returns the final transcript: one Whisper
     /// pass over the whole recording, exactly what the classic mode produces
     /// (chunks give Whisper too little context, and words at a cut can come
-    /// out twice). The live text is only the fallback when that pass yields
-    /// nothing. Field and clipboard show the result by then.
-    func finish(samples: [Float]) async -> Outcome {
+    /// out twice). The live text is the fallback when that pass yields
+    /// nothing or misses `passDeadline` (2026-11-25: the model was still
+    /// loading and the app stayed "transcribing" for good). Field and
+    /// clipboard show the result by then; every wait here is bounded.
+    func finish(samples: [Float], passDeadline: TimeInterval) async -> Outcome {
         _ = feeder.flush()
         finishing = true
         chunkSink.finish()
         worker?.cancel()
-        async let whole = transcribeWhole(samples)
-        await recognizerStart?.value
-        if #available(macOS 26, *), let recognizer = recognizer as? LiveSpeechRecognizer {
-            await recognizer.finish()
-            // Results hop to the main queue; let those already queued land.
-            await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
+        let provider = provider
+        let request = TranscriptionRequest(samples: samples, languageCode: languageCode, prompt: vocabulary.prompt)
+        let vocabulary = vocabulary
+        async let whole = withDeadline(seconds: passDeadline) {
+            await Self.transcribeWhole(request, provider: provider, vocabulary: vocabulary)
+        }
+        // The live text is only the fallback: never wait long for the recognizer.
+        _ = await withDeadline(seconds: 3) { @MainActor [self] in
+            await recognizerStart?.value
+            if #available(macOS 26, *), let recognizer = recognizer as? LiveSpeechRecognizer {
+                await recognizer.finish()
+                // Results hop to the main queue; let those already queued land.
+                await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
+            }
         }
         let live = Self.joined(text.confirmedText, text.provisionalText)
         let final: String
         let finalPassFailed: Bool
-        if let whole = await whole, !whole.isEmpty {
+        let passResult = await whole
+        if passResult == nil { FileLog.write("LIVE final pass missed its \(Int(passDeadline)) s deadline") }
+        if let whole = passResult ?? nil, !whole.isEmpty {
             final = whole
             finalPassFailed = false
         } else {
@@ -219,10 +231,12 @@ final class LiveDictationSession {
         }
     }
 
-    private func transcribeWhole(_ samples: [Float]) async -> String? {
+    /// Off the main actor, so a stalled model load never holds it.
+    private nonisolated static func transcribeWhole(
+        _ request: TranscriptionRequest, provider: any TranscriptionProvider, vocabulary: Vocabulary
+    ) async -> String? {
         do {
             try await provider.prepare()
-            let request = TranscriptionRequest(samples: samples, languageCode: languageCode, prompt: vocabulary.prompt)
             let whole = vocabulary.apply(to: try await provider.transcribe(request))
             return whole.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         } catch {
