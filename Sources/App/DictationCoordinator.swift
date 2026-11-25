@@ -562,11 +562,20 @@ final class DictationCoordinator: ObservableObject {
     }
 
     private func finishLiveSession(_ live: LiveDictationSession, samples: [Float]) async {
-        let outcome = await live.finish(samples: samples)
+        // A model still loading (first load after install or launch can take minutes) must
+        // show as such, and must never keep the app "transcribing" for good.
+        if settings.providerKind == .whisperKit, await !whisperProvider.isReady {
+            state.statusDetail = "Loading model…"
+            FileLog.write("LIVE final pass waits for the Whisper model to load")
+        }
+        let duration = Double(samples.count) / AudioCaptureEngine.targetSampleRate
+        let outcome = await live.finish(samples: samples, passDeadline: finalPassDeadline(recordingDuration: duration))
         endLiveSession(live)
         state.statusDetail = nil
         guard !outcome.text.isEmpty else {
-            reportError(TranscriptionError.emptyResult.localizedDescription)
+            reportError(outcome.finalPassFailed
+                ? "Whisper did not finish in time (the model may still be loading). Try again in a moment."
+                : TranscriptionError.emptyResult.localizedDescription)
             return
         }
         state.lastTranscript = outcome.text

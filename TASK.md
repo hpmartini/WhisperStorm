@@ -1,5 +1,44 @@
 # TASK.md — Issue Log
 
+## 2026-11-25 — Every dictation hangs in "transcribing" after installing PR #11
+
+### Issue
+Right after installing #11 (and again after a restart) each live dictation
+stopped at `STOP …`: no `WHISPER in`, phase `transcribing` for good, every
+later start `ignored: already transcribing`.
+
+### Root cause
+Not the vocabulary file (created at the first dictation, read fine; tests
+for missing and present file). The system log of the hung process shows the
+launch warm-up loading the Whisper model (MIL mmaps of encoder and the
+1.27 GB decoder at 18:41:42–49) and, at the STOP 3 min later, a *second*
+load of the same model starting (mel model mmap at 18:44:59) and never
+progressing; same pattern after the restart (load 18:49:15, STOP 18:49:23,
+second load 18:49:23). `WhisperKitProvider` is an actor; while the warm-up
+awaited `WhisperKit(config)`, `prepare()` from the final pass re-entered,
+found no pipeline and started another load. The live final pass awaited
+that without any time limit. The CoreML cache entry of the decoder was
+rewritten at 18:50, i.e. the model was being re-specialized, which takes
+minutes (why the cache was invalid is not known).
+
+### Fix
+- `WhisperKitProvider`: one load at a time; concurrent callers wait for the
+  load in progress. Load start/end/failure go to the file log
+  (`WHISPER model …: loading / loaded in N s`).
+- Live final pass bounded by `withDeadline` (20 s + a tenth of the
+  recording): on timeout the live text stays, overlay "Correction failed —
+  live text kept", phase back to idle. The recognizer finalize is bounded
+  (3 s) too. While the model loads, the overlay says "Loading model…".
+- `withDeadline` returns even when the work ignores cancellation (a task
+  group would wait for it).
+
+### Verification
+Harness with the real WhisperKit model in a fresh process (cold load, as
+after an install), warm-up started at launch, dictation (5.5 s) after 3 s:
+main (3a44b48) `HANG: finish did not return within 90 s`; fix: second caller
+logs "waiting for the load in progress", the pass misses its 20 s deadline,
+`FINISHED after 21.8 s` with the live text.
+
 ## 2026-11-24 — Hotkey dictation transcribes but never pastes
 
 ### Issue
